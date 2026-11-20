@@ -66,6 +66,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         Prefs.init(this)
+        intent?.getStringExtra("dictionary")?.let { Prefs.dictionary = it; Prefs.save() }
+        intent?.getStringExtra("gemini_key")?.let { if (it.isNotBlank()) { Prefs.geminiKey = it.trim(); Prefs.save() } }
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1)
         PadClient.start(applicationContext)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(
@@ -122,7 +126,7 @@ private fun TopBar(typing: Boolean, onType: () -> Unit, onConnect: () -> Unit, o
     Row(Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(10.dp).clip(CircleShape).background(color))
         Spacer(Modifier.width(8.dp))
-        Text(text, fontSize = 13.sp, maxLines = 1, modifier = Modifier.weight(1f), color = Color(0xFFD0D2D8))
+        Text(if (Voice.status.isNotEmpty() && Voice.state != VoiceState.Idle || Voice.status.startsWith("Error") || Voice.status.startsWith("Add")) Voice.status else text, fontSize = 13.sp, maxLines = 1, modifier = Modifier.weight(1f), color = Color(0xFFD0D2D8))
         DictateButton()
         TextButton(onClick = onConnect) { Text(if (PadClient.found.isNotEmpty() && !PadClient.connected) "Connect (${PadClient.found.size})" else "Connect") }
         if (typing) Button(onClick = onType) { Text("Keys") } else OutlinedButton(onClick = onType) { Text("Type") }
@@ -217,6 +221,12 @@ private fun SettingsDialog(onClose: () -> Unit) {
                 SwitchRow("Left/right click strips", Prefs.strips) { Prefs.strips = it; Prefs.save() }
                 SwitchRow("Haptic feedback", Prefs.haptics) { Prefs.haptics = it; Prefs.save() }
                 SwitchRow("Press Return after typed text", Prefs.returnAfter) { Prefs.returnAfter = it; Prefs.save() }
+                SwitchRow("Mic button uses phone mic (off = Mac DScribe)", Prefs.phoneMic) { Prefs.phoneMic = it; Prefs.save() }
+                OutlinedTextField(Prefs.geminiKey, { Prefs.geminiKey = it; Prefs.save() }, singleLine = true,
+                    label = { Text("Gemini API key") }, modifier = Modifier.fillMaxWidth(),
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
+                OutlinedTextField(Prefs.dictionary, { Prefs.dictionary = it; Prefs.save() },
+                    label = { Text("Dictionary (comma-separated terms)") }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
             }
         },
         confirmButton = { TextButton(onClick = { Prefs.save(); onClose() }) { Text("Done") } },
@@ -231,31 +241,36 @@ private fun SwitchRow(label: String, value: Boolean, onChange: (Boolean) -> Unit
     }
 }
 
-/** DScribe trigger: holds Right Option (keycode 61) on the Mac.
+/** Dictation button. Phone mic mode: record on phone -> Gemini -> typed on Mac.
+ *  Mac DScribe mode: holds Right Option (keycode 61) so DScribe on the Mac listens.
  *  Hold = push-to-talk. Quick tap = lock on (hands-free); tap again to stop. */
 @Composable
 private fun DictateButton() {
     val ctx = LocalContext.current
     var on by remember { mutableStateOf(false) }
     var locked by remember { mutableStateOf(false) }
+    fun begin(): Boolean = if (Prefs.phoneMic) Voice.start() else { PadClient.key(61, true); true }
+    fun finish() { if (Prefs.phoneMic) Voice.stop() else PadClient.key(61, false) }
+    val busy = Voice.state == VoiceState.Processing
     Box(
         Modifier.padding(horizontal = 4.dp).height(34.dp).width(64.dp).clip(CircleShape)
-            .background(if (on) Color(0xFFE5484D) else Color(0xFF2B2D33))
+            .background(when { on -> Color(0xFFE5484D); busy -> Color(0xFFFFB300); else -> Color(0xFF2B2D33) })
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown().consume()
                     Haptics.tick(ctx, strong = true)
                     if (locked) {
-                        PadClient.key(61, false); locked = false; on = false
+                        finish(); locked = false; on = false
                         waitForUpOrCancellation(); return@awaitEachGesture
                     }
-                    PadClient.key(61, true); on = true
+                    if (!begin()) { waitForUpOrCancellation(); return@awaitEachGesture }
+                    on = true
                     val t0 = System.currentTimeMillis()
                     waitForUpOrCancellation()
                     if (System.currentTimeMillis() - t0 < 350) { locked = true }
-                    else { PadClient.key(61, false); on = false; Haptics.tick(ctx) }
+                    else { finish(); on = false; Haptics.tick(ctx) }
                 }
             },
         contentAlignment = Alignment.Center,
-    ) { Text(if (locked) "■ Stop" else "🎤", fontSize = if (locked) 12.sp else 16.sp, color = Color.White) }
+    ) { Text(when { locked -> "■ Stop"; busy -> "…"; else -> "🎤" }, fontSize = if (locked) 12.sp else 16.sp, color = Color.White) }
 }

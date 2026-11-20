@@ -19,6 +19,9 @@ object Prefs {
     var strips by mutableStateOf(true)
     var haptics by mutableStateOf(true)
     var returnAfter by mutableStateOf(false)
+    var geminiKey by mutableStateOf("")
+    var dictionary by mutableStateOf("")
+    var phoneMic by mutableStateOf(true)
 
     fun init(ctx: Context) {
         sp = ctx.getSharedPreferences("padkey", Context.MODE_PRIVATE)
@@ -31,6 +34,9 @@ object Prefs {
         strips = sp.getBoolean("strips", true)
         haptics = sp.getBoolean("haptics", true)
         returnAfter = sp.getBoolean("returnAfter", false)
+        geminiKey = sp.getString("geminiKey", "") ?: ""
+        dictionary = sp.getString("dictionary", "") ?: ""
+        phoneMic = sp.getBoolean("phoneMic", true)
     }
 
     fun save() {
@@ -40,6 +46,7 @@ object Prefs {
             .putFloat("sens", sens).putFloat("scrollSpeed", scrollSpeed)
             .putBoolean("natural", natural).putBoolean("strips", strips)
             .putBoolean("haptics", haptics).putBoolean("returnAfter", returnAfter)
+            .putString("geminiKey", geminiKey).putString("dictionary", dictionary).putBoolean("phoneMic", phoneMic)
             .apply()
     }
 }
