@@ -54,6 +54,11 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
 
 class MainActivity : ComponentActivity() {
@@ -118,6 +123,7 @@ private fun TopBar(typing: Boolean, onType: () -> Unit, onConnect: () -> Unit, o
         Box(Modifier.size(10.dp).clip(CircleShape).background(color))
         Spacer(Modifier.width(8.dp))
         Text(text, fontSize = 13.sp, maxLines = 1, modifier = Modifier.weight(1f), color = Color(0xFFD0D2D8))
+        DictateButton()
         TextButton(onClick = onConnect) { Text(if (PadClient.found.isNotEmpty() && !PadClient.connected) "Connect (${PadClient.found.size})" else "Connect") }
         if (typing) Button(onClick = onType) { Text("Keys") } else OutlinedButton(onClick = onType) { Text("Type") }
         TextButton(onClick = onSettings) { Text("⚙", fontSize = 20.sp) }
@@ -223,4 +229,33 @@ private fun SwitchRow(label: String, value: Boolean, onChange: (Boolean) -> Unit
         Text(label, modifier = Modifier.weight(1f), fontSize = 14.sp)
         Switch(value, onChange)
     }
+}
+
+/** DScribe trigger: holds Right Option (keycode 61) on the Mac.
+ *  Hold = push-to-talk. Quick tap = lock on (hands-free); tap again to stop. */
+@Composable
+private fun DictateButton() {
+    val ctx = LocalContext.current
+    var on by remember { mutableStateOf(false) }
+    var locked by remember { mutableStateOf(false) }
+    Box(
+        Modifier.padding(horizontal = 4.dp).height(34.dp).width(64.dp).clip(CircleShape)
+            .background(if (on) Color(0xFFE5484D) else Color(0xFF2B2D33))
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown().consume()
+                    Haptics.tick(ctx, strong = true)
+                    if (locked) {
+                        PadClient.key(61, false); locked = false; on = false
+                        waitForUpOrCancellation(); return@awaitEachGesture
+                    }
+                    PadClient.key(61, true); on = true
+                    val t0 = System.currentTimeMillis()
+                    waitForUpOrCancellation()
+                    if (System.currentTimeMillis() - t0 < 350) { locked = true }
+                    else { PadClient.key(61, false); on = false; Haptics.tick(ctx) }
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) { Text(if (locked) "■ Stop" else "🎤", fontSize = if (locked) 12.sp else 16.sp, color = Color.White) }
 }
