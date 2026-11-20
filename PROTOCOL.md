@@ -56,3 +56,27 @@ shift = 1, ctrl = 2, alt/option = 4, cmd = 8, fn = 16, caps = 32.
     {"t":"key","c":0,"d":true,"f":0}
     {"t":"text","s":"hello é"}
     {"t":"media","k":"volup"}
+
+## Screen mirror (v1 extension)
+
+Control messages stay on port 50505; the video goes on a **separate TCP port 50506** so input latency is unaffected.
+
+### Control
+
+| Message | Direction | Fields | Meaning |
+|---|---|---|---|
+| `screen` | phone -> Mac | `on` (bool), `display` (index, optional) | Start/stop mirroring; `display` switches the mirrored display (index into `screeninfo.displays`, main display = 0). Capture only runs while at least one phone has `on` and a video viewer is connected. First use triggers the macOS Screen Recording prompt. |
+| `moveto` | phone -> Mac | `x`, `y` in 0..1, optional `f` | Absolute pointer move on the mirrored display (normalized, top-left origin). Follow with `click` for a tap. |
+| `screeninfo` | Mac -> phone | `w`,`h` (display size in points), `sel` (selected index), `displays` = `[{"id":0,"name":"..."}]`, `ok` (capture usable), `perm` (Screen Recording granted) | Sent after `screen on` and whenever capture starts/fails. |
+| `cursor` | Mac -> phone | `x`,`y` (normalized to the mirrored display; can be outside 0..1 on other displays) | Pointer position, ~15 Hz while mirroring and only when it moved. |
+
+### Video stream (port 50506)
+
+1. Viewer connects and sends one line `{"t":"hello","token":"..."}` + `\n` (token only checked if the Mac has one; must arrive within 5 s).
+2. Mac then sends frames: **4-byte big-endian length + one Annex-B H.264 access unit** (start codes `00 00 00 01`).
+   Every keyframe carries SPS+PPS in front; a new viewer receives nothing until the next keyframe (a keyframe is forced on connect).
+3. Encoding: ScreenCaptureKit -> VideoToolbox H.264 Main, <= 1280 px wide (display aspect, even dimensions), 30 fps max (idle screens send nothing),
+   ~4 Mbps, no B-frames, keyframe every 2 s. A viewer that falls behind has frames dropped until its next keyframe.
+4. Switching display changes the resolution at the next keyframe (new SPS); decoders must handle a format change.
+
+Test: `python3 tools/test_stream.py [host] [token] [out.h264]` (writes raw Annex-B, playable with `ffplay out.h264`).

@@ -110,6 +110,28 @@ final class Injector {
         pos = np
     }
 
+    /// Absolute move to a global (CG) point, e.g. a tap on the mirrored screen. Warps synchronously so an
+    /// immediately following click lands in the right place.
+    func moveTo(_ p: CGPoint, flags: Int = 0) {
+        let np = clamp(p)
+        let dx = havePos ? np.x - pos.x : 0, dy = havePos ? np.y - pos.y : 0
+        let type: CGEventType
+        let btn: CGMouseButton
+        if leftDown { type = .leftMouseDragged; btn = .left }
+        else if rightDown { type = .rightMouseDragged; btn = .right }
+        else if otherDown { type = .otherMouseDragged; btn = .center }
+        else { type = .mouseMoved; btn = .left }
+        CGWarpMouseCursorPosition(np)
+        if let e = CGEvent(mouseEventSource: src, mouseType: type, mouseCursorPosition: np, mouseButton: btn) {
+            e.setIntegerValueField(.mouseEventDeltaX, value: Int64(dx.rounded()))
+            e.setIntegerValueField(.mouseEventDeltaY, value: Int64(dy.rounded()))
+            e.flags = heldFlags.union(Injector.cgFlags(flags))
+            e.post(tap: .cghidEventTap)
+        }
+        pos = np
+        havePos = true
+    }
+
     func button(_ name: String, down: Bool, clickState: Int = 1, flags: Int = 0) {
         syncPos()
         let type: CGEventType

@@ -29,6 +29,16 @@ object PadClient {
     var latency by mutableStateOf(-1)
     val found = mutableStateListOf<Mac>()
 
+    // Screen mirror state (from `screeninfo` / `cursor`)
+    var sessionId by mutableStateOf(0)            // bumps on every (re)connect so the video socket reconnects too
+    var screenW by mutableStateOf(0)
+    var screenH by mutableStateOf(0)
+    var screenOk by mutableStateOf(true)          // false: Mac has no Screen Recording permission / capture failed
+    var displays by mutableStateOf(listOf<Pair<Int, String>>())
+    var cursorX by mutableStateOf(-1f)
+    var cursorY by mutableStateOf(-1f)
+    @Volatile var sessionHost = ""
+
     @Volatile private var socket: Socket? = null
     @Volatile private var autoConnect = true
     @Volatile private var failCount = 0
@@ -100,6 +110,7 @@ object PadClient {
             return
         }
         socket = s
+        sessionHost = host
         lastRx = System.currentTimeMillis()
         q.clear()
         synchronized(lock) { pdx = 0f; pdy = 0f; psx = 0f; psy = 0f }
@@ -141,7 +152,16 @@ object PadClient {
                         state = LinkState.Connected
                         message = ""
                         failCount = 0
+                        sessionId++
+                        if (Prefs.screen) screen(true, Prefs.display)
                     }
+                    "screeninfo" -> {
+                        screenW = o.optInt("w"); screenH = o.optInt("h")
+                        screenOk = o.optBoolean("ok", true)
+                        val arr = o.optJSONArray("displays")
+                        if (arr != null) displays = (0 until arr.length()).map { arr.getJSONObject(it).let { d -> d.optInt("id") to d.optString("name") } }
+                    }
+                    "cursor" -> { cursorX = o.optDouble("x").toFloat(); cursorY = o.optDouble("y").toFloat() }
                     "pong" -> latency = (System.currentTimeMillis() - o.optLong("id")).toInt().coerceAtLeast(0)
                     "error" -> { message = "Mac: " + o.optString("msg"); autoConnect = false }
                 }
@@ -189,6 +209,10 @@ object PadClient {
     fun key(code: Int, down: Boolean, flags: Int = 0) = send("{\"t\":\"key\",\"c\":$code,\"d\":$down,\"f\":$flags}")
     fun media(k: String) = send("{\"t\":\"media\",\"k\":\"$k\"}")
     fun text(s: String) = send("{\"t\":\"text\",\"s\":${JSONObject.quote(s)}}")
+
+    fun screen(on: Boolean, display: Int) = send("{\"t\":\"screen\",\"on\":$on,\"display\":$display}")
+    fun moveTo(x: Float, y: Float) = send("{\"t\":\"moveto\",\"x\":${fmt4(x)},\"y\":${fmt4(y)}}")
+    private fun fmt4(f: Float) = String.format(Locale.US, "%.4f", f)
 
     fun tap(code: Int, flags: Int = 0) { key(code, true, flags); key(code, false, flags) }
 

@@ -4,7 +4,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -91,28 +95,66 @@ fun App() {
     var showSettings by remember { mutableStateOf(false) }
     val landscape = LocalConfiguration.current.screenWidthDp > LocalConfiguration.current.screenHeightDp
 
+    var showDisplays by remember { mutableStateOf(false) }
+    val mirror = Prefs.screen
+    fun toggleScreen() {
+        Prefs.screen = !Prefs.screen; Prefs.save()
+        PadClient.screen(Prefs.screen, Prefs.display)
+    }
+
     Column(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
             .statusBarsPadding().navigationBarsPadding().imePadding(),
     ) {
-        TopBar(typing, { typing = !typing }, { showConnect = true }, { showSettings = true })
+        TopBar(typing, { typing = !typing }, { showConnect = true }, { showSettings = true }, ::toggleScreen, { showDisplays = true })
+        val keys: @Composable (Modifier) -> Unit = { m -> if (typing) TypePanel(m) else KeyboardPanel(m) }
         if (landscape) {
             Row(Modifier.weight(1f).fillMaxWidth().padding(4.dp)) {
-                Touchpad(Modifier.weight(1f).fillMaxSize())
-                Spacer(Modifier.width(6.dp))
-                if (typing) TypePanel(Modifier.weight(1.2f).fillMaxSize()) else KeyboardPanel(Modifier.weight(1.2f).fillMaxSize())
+                if (mirror) {
+                    ScreenView(Modifier.weight(1.5f).fillMaxSize())
+                    Spacer(Modifier.width(6.dp))
+                    Column(Modifier.weight(1f).fillMaxSize()) {
+                        Touchpad(Modifier.weight(1f).fillMaxWidth())
+                        Spacer(Modifier.height(4.dp))
+                        keys(Modifier.weight(1f).fillMaxWidth())
+                    }
+                } else {
+                    Touchpad(Modifier.weight(1f).fillMaxSize())
+                    Spacer(Modifier.width(6.dp))
+                    keys(Modifier.weight(1.2f).fillMaxSize())
+                }
             }
+        } else if (mirror) {
+            // three equal parts: screen / touchpad / keyboard
+            ScreenView(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp))
+            Touchpad(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp))
+            keys(Modifier.weight(1f).fillMaxWidth())
         } else {
             Touchpad(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp))
-            if (typing) TypePanel(Modifier.weight(1f).fillMaxWidth()) else KeyboardPanel(Modifier.weight(1f).fillMaxWidth())
+            keys(Modifier.weight(1f).fillMaxWidth())
         }
     }
+    if (showDisplays) DisplayDialog { showDisplays = false }
     if (showConnect) ConnectDialog { showConnect = false }
     if (showSettings) SettingsDialog { showSettings = false }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TopBar(typing: Boolean, onType: () -> Unit, onConnect: () -> Unit, onSettings: () -> Unit) {
+private fun BarChip(label: String, active: Boolean = false, onLong: (() -> Unit)? = null, onClick: () -> Unit) {
+    Box(
+        Modifier.height(32.dp).clip(RoundedCornerShape(16.dp))
+            .background(if (active) MaterialTheme.colorScheme.primary else Color(0xFF2B2D33))
+            .combinedClickable(onLongClick = onLong, onClick = onClick).padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(label, fontSize = 13.sp, maxLines = 1, color = if (active) Color.Black else Color.White) }
+}
+
+@Composable
+private fun TopBar(
+    typing: Boolean, onType: () -> Unit, onConnect: () -> Unit, onSettings: () -> Unit,
+    onScreen: () -> Unit, onDisplays: () -> Unit,
+) {
     val color = when (PadClient.state) {
         LinkState.Connected -> Color(0xFF3DDC84)
         LinkState.Connecting -> Color(0xFFFFB300)
@@ -125,13 +167,45 @@ private fun TopBar(typing: Boolean, onType: () -> Unit, onConnect: () -> Unit, o
     }
     Row(Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(10.dp).clip(CircleShape).background(color))
-        Spacer(Modifier.width(8.dp))
-        Text(if (Voice.status.isNotEmpty() && Voice.state != VoiceState.Idle || Voice.status.startsWith("Error") || Voice.status.startsWith("Add")) Voice.status else text, fontSize = 13.sp, maxLines = 1, modifier = Modifier.weight(1f), color = Color(0xFFD0D2D8))
+        Spacer(Modifier.width(6.dp))
+        Text(if (Voice.status.isNotEmpty() && Voice.state != VoiceState.Idle || Voice.status.startsWith("Error") || Voice.status.startsWith("Add")) Voice.status else text,
+            fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f), color = Color(0xFFD0D2D8))
+        Spacer(Modifier.width(4.dp))
         DictateButton()
-        TextButton(onClick = onConnect) { Text(if (PadClient.found.isNotEmpty() && !PadClient.connected) "Connect (${PadClient.found.size})" else "Connect") }
-        if (typing) Button(onClick = onType) { Text("Keys") } else OutlinedButton(onClick = onType) { Text("Type") }
-        TextButton(onClick = onSettings) { Text("⚙", fontSize = 20.sp) }
+        Spacer(Modifier.width(4.dp))
+        BarChip("🖥", active = Prefs.screen, onLong = onDisplays, onClick = onScreen)
+        Spacer(Modifier.width(4.dp))
+        BarChip(if (PadClient.found.isNotEmpty() && !PadClient.connected) "Connect·${PadClient.found.size}" else "Connect", onClick = onConnect)
+        Spacer(Modifier.width(4.dp))
+        BarChip(if (typing) "Keys" else "Type", active = typing, onClick = onType)
+        Spacer(Modifier.width(4.dp))
+        BarChip("⚙", onClick = onSettings)
     }
+}
+
+@Composable
+private fun DisplayDialog(onClose: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Mirror which display?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val list = PadClient.displays.ifEmpty { listOf(0 to "Main display") }
+                list.forEach { (id, name) ->
+                    Row(
+                        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small)
+                            .background(if (id == Prefs.display) Color(0x55FF7A1A) else Color(0xFF2B2D33))
+                            .clickable {
+                                Prefs.display = id; Prefs.screen = true; Prefs.save()
+                                PadClient.screen(true, id); onClose()
+                            }.padding(12.dp),
+                    ) { Text(name, fontSize = 14.sp) }
+                }
+                Text("Tap the 🖥 button to switch the mirror on or off. Long-press it to pick a display.", fontSize = 12.sp, color = Color(0xFF9A9CA3))
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
+    )
 }
 
 @Composable
@@ -253,7 +327,7 @@ private fun DictateButton() {
     fun finish() { if (Prefs.phoneMic) Voice.stop() else PadClient.key(61, false) }
     val busy = Voice.state == VoiceState.Processing
     Box(
-        Modifier.padding(horizontal = 4.dp).height(34.dp).width(64.dp).clip(CircleShape)
+        Modifier.height(32.dp).width(48.dp).clip(CircleShape)
             .background(when { on -> Color(0xFFE5484D); busy -> Color(0xFFFFB300); else -> Color(0xFF2B2D33) })
             .pointerInput(Unit) {
                 awaitEachGesture {
@@ -272,5 +346,5 @@ private fun DictateButton() {
                 }
             },
         contentAlignment = Alignment.Center,
-    ) { Text(when { locked -> "■ Stop"; busy -> "…"; else -> "🎤" }, fontSize = if (locked) 12.sp else 16.sp, color = Color.White) }
+    ) { Text(when { locked -> "■ Stop"; busy -> "…"; else -> "🎤" }, fontSize = if (locked) 11.sp else 15.sp, color = Color.White) }
 }

@@ -22,6 +22,9 @@ object Prefs {
     var geminiKey by mutableStateOf("")
     var dictionary by mutableStateOf("")
     var phoneMic by mutableStateOf(true)
+    var screen by mutableStateOf(false)   // Mac screen mirror (3-way layout) on/off
+    var display by mutableStateOf(0)      // which Mac display to mirror
+    var follow by mutableStateOf(false)   // keep the Mac cursor centered while zoomed in
 
     fun init(ctx: Context) {
         sp = ctx.getSharedPreferences("padkey", Context.MODE_PRIVATE)
@@ -37,6 +40,9 @@ object Prefs {
         geminiKey = sp.getString("geminiKey", "") ?: ""
         dictionary = sp.getString("dictionary", "") ?: ""
         phoneMic = sp.getBoolean("phoneMic", true)
+        screen = sp.getBoolean("screen", false)
+        display = sp.getInt("display", 0)
+        follow = sp.getBoolean("follow", false)
     }
 
     fun save() {
@@ -47,6 +53,7 @@ object Prefs {
             .putBoolean("natural", natural).putBoolean("strips", strips)
             .putBoolean("haptics", haptics).putBoolean("returnAfter", returnAfter)
             .putString("geminiKey", geminiKey).putString("dictionary", dictionary).putBoolean("phoneMic", phoneMic)
+            .putBoolean("screen", screen).putInt("display", display).putBoolean("follow", follow)
             .apply()
     }
 }

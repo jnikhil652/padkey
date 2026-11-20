@@ -51,6 +51,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             add(menu, "Accessibility NOT granted - click to fix", action: #selector(openAccessibility))
             add(menu, "(System Settings > Privacy & Security > Accessibility > enable PadKey)")
         }
+        if CGPreflightScreenCaptureAccess() {
+            add(menu, "Screen Recording: granted" + (ScreenStreamer.shared.running ? " (mirroring)" : ""))
+        } else {
+            add(menu, "Screen Recording NOT granted - click to fix", action: #selector(openScreenRecording))
+            add(menu, "(System Settings > Privacy & Security > Screen Recording > enable PadKey)")
+        }
         add(menu, Server.token.isEmpty ? "Token: none (open to LAN)" : "Token: required (~/.config/padkey/token)")
         menu.addItem(.separator())
         let q = NSMenuItem(title: "Quit PadKey", action: #selector(quit), keyEquivalent: "q")
@@ -74,6 +80,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openAccessibility() {
         _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
         if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(u)
+        }
+    }
+
+    @objc private func openScreenRecording() {
+        _ = CGRequestScreenCaptureAccess()
+        if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(u)
         }
     }

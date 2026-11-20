@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Network
 
@@ -21,7 +22,46 @@ final class Server {
 
     var clientNames: [String] { conns.values.filter { $0.authed }.map { $0.remote } }
 
+    /// Per-connection screen-mirror requests; capture runs while any phone wants it.
+    fileprivate var screenWanted: [ObjectIdentifier: Int] = [:]
+    private var cursorTimer: DispatchSourceTimer?
+
+    fileprivate func screenRequest(_ c: Conn, on: Bool, display: Int?) {
+        if on { screenWanted[ObjectIdentifier(c)] = display ?? screenWanted[ObjectIdentifier(c)] ?? Displays.selected }
+        else { screenWanted[ObjectIdentifier(c)] = nil }
+        if on, let d = display { Displays.selected = d }
+        ScreenStreamer.shared.setRequest(on: !screenWanted.isEmpty, index: Displays.selected)
+        if on { c.sendScreenInfo() }
+        updateCursorTimer()
+    }
+
+    private func updateCursorTimer() {
+        if screenWanted.isEmpty { cursorTimer?.cancel(); cursorTimer = nil; return }
+        if cursorTimer != nil { return }
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now(), repeating: 1.0 / 15)
+        var last = CGPoint(x: -1, y: -1)
+        t.setEventHandler { [weak self] in
+            guard let self = self, let loc = CGEvent(source: nil)?.location else { return }
+            let b = Displays.bounds(at: Displays.selected)
+            let p = CGPoint(x: (loc.x - b.minX) / max(b.width, 1), y: (loc.y - b.minY) / max(b.height, 1))
+            if hypot(p.x - last.x, p.y - last.y) < 0.0005 { return }
+            last = p
+            for c in self.conns.values where c.authed && self.screenWanted[ObjectIdentifier(c)] != nil {
+                c.send(["t": "cursor", "x": Double(p.x), "y": Double(p.y)])
+            }
+        }
+        t.resume()
+        cursorTimer = t
+    }
+
+    fileprivate func broadcastScreenInfo() {
+        for c in conns.values where c.authed && screenWanted[ObjectIdentifier(c)] != nil { c.sendScreenInfo() }
+    }
+
     func start() {
+        ScreenStreamer.shared.startListener()
+        ScreenStreamer.shared.onState = { [weak self] in self?.broadcastScreenInfo() }
         let params = NWParameters.tcp
         if let tcp = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
             tcp.noDelay = true
@@ -61,6 +101,10 @@ final class Server {
 
     fileprivate func closed(_ c: Conn) {
         conns[ObjectIdentifier(c)] = nil
+        if screenWanted.removeValue(forKey: ObjectIdentifier(c)) != nil {
+            ScreenStreamer.shared.setRequest(on: !screenWanted.isEmpty, index: Displays.selected)
+            updateCursorTimer()
+        }
         if conns.isEmpty { injector.releaseAll() }
         onChange?()
     }
@@ -133,6 +177,14 @@ private final class Conn {
         nw.send(content: d, completion: .contentProcessed { _ in })
     }
 
+    func sendScreenInfo() {
+        let b = Displays.bounds(at: Displays.selected)
+        let st = ScreenStreamer.shared
+        send(["t": "screeninfo", "w": Int(b.width), "h": Int(b.height), "sel": Displays.selected,
+              "displays": Displays.list(), "ok": CGPreflightScreenCaptureAccess() && !st.failed,
+              "perm": CGPreflightScreenCaptureAccess()])
+    }
+
     func handle(_ line: Data) {
         guard let o = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
               let t = o["t"] as? String else { return }
@@ -164,6 +216,14 @@ private final class Conn {
         case "text": if let s = o["s"] as? String { inj.text(s) }
         case "media": if let k = o["k"] as? String { inj.media(k) }
         case "release": inj.releaseAll()
+        case "screen":
+            let on = (o["on"] as? NSNumber)?.boolValue ?? true
+            if on && !CGPreflightScreenCaptureAccess() { _ = CGRequestScreenCaptureAccess() }
+            server.screenRequest(self, on: on, display: (o["display"] as? NSNumber)?.intValue)
+        case "moveto":
+            let b = Displays.bounds(at: Displays.selected)
+            let x = min(max(num("x"), 0), 1), y = min(max(num("y"), 0), 1)
+            inj.moveTo(CGPoint(x: b.minX + x * (b.width - 1), y: b.minY + y * (b.height - 1)), flags: int("f"))
         default: break
         }
     }
