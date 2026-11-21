@@ -12,7 +12,7 @@ Phone -> Mac (first message):
 
 Mac -> Phone:
 
-    {"t":"hello","ok":true,"name":"Nik's MacBook Pro","v":1}
+    {"t":"hello","ok":true,"name":"My MacBook Pro","v":1}
 
 If the Mac has a token (file `~/.config/padkey/token`, one line) and it does not match, the Mac replies
 `{"t":"error","msg":"bad token"}` and closes. With no token file, hello is optional and everything is accepted

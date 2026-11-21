@@ -1,13 +1,21 @@
 # PadKey
 
-Control a MacBook from an Android phone on the same Wi-Fi: touchpad on top, a custom Mac keyboard below
-(Cmd/Opt/Ctrl/Fn, arrows, F-keys, media keys, shortcuts), plus a "Type" mode that uses the normal Android
-keyboard (swipe typing / voice typing) and sends the text.
+Open-source remote for your Mac, from your Android phone, over Wi-Fi. No physical keyboard or mouse needed.
+
+- **Touchpad**: move, tap/double-tap, drag, two-finger scroll and right-click, three-finger swipes for Spaces and Mission Control
+- **Full Mac keyboard**: Cmd/Opt/Ctrl/Fn, arrows, F-keys, media keys, a shortcut strip, and modifiers that latch or lock
+- **Voice dictation**: hold 🎤 and speak; Gemini cleans up the text, which is then typed on the Mac (or trigger [DScribe](https://github.com/jnikhil652/dscribe) on the Mac)
+- **Type mode**: use your Android keyboard (swipe/voice typing) and send the text
+- **Screen mirror**: tap 🖥 to see the Mac screen live (H.264) and tap on it to click there; portrait splits into screen / touchpad / keyboard
+
+Everything stays on your local network: there's no account and no cloud relay. Dictation is the exception, because it calls the Gemini API with your own key.
 
     macos/      Swift menu-bar agent (SwiftPM, builds a .app)
     android/    Kotlin + Jetpack Compose app
     tools/      test_client.py (input smoke test), test_stream.py (screen-mirror stream test)
     PROTOCOL.md newline-delimited JSON over TCP :50505, H.264 screen stream on :50506, Bonjour _padkey._tcp
+
+> Security note: anyone on your Wi-Fi can connect unless you set a token (`~/.config/padkey/token`). Use it on networks you trust.
 
 ## 1. Mac agent
 
@@ -92,3 +100,7 @@ mirror is on. Test the stream without the phone: `python3 tools/test_stream.py`.
 
 Mission Control / Spaces swipes rely on the default macOS keyboard shortcuts (System Settings > Keyboard > Keyboard Shortcuts
 > Mission Control).
+
+## License
+
+MIT, see [LICENSE](LICENSE).
