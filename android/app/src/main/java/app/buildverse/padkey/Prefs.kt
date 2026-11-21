@@ -5,6 +5,11 @@ import android.content.SharedPreferences
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** A Mac this phone is paired with: `secret` is the 32-byte long-term key (base64), never leaves the phone. */
+data class Paired(val mid: String, val name: String, val secret: String)
 
 /** Settings, backed by SharedPreferences. Fields are Compose state so the UI reacts. */
 object Prefs {
@@ -12,7 +17,10 @@ object Prefs {
 
     var host by mutableStateOf("")
     var port by mutableStateOf(50505)
-    var token by mutableStateOf("")
+    var phoneId by mutableStateOf("")       // random id this phone presents to every Mac
+    var pairings by mutableStateOf(listOf<Paired>())
+    var insertPaste by mutableStateOf(true) // dictation / Type mode: true = paste via Mac clipboard, false = type keystrokes
+    var quality by mutableStateOf(0)        // mirror quality: 0 Standard, 1 Sharp
     var sens by mutableStateOf(1.0f)
     var scrollSpeed by mutableStateOf(1.2f)
     var natural by mutableStateOf(true)
@@ -30,7 +38,14 @@ object Prefs {
         sp = ctx.getSharedPreferences("padkey", Context.MODE_PRIVATE)
         host = sp.getString("host", "") ?: ""
         port = sp.getInt("port", 50505)
-        token = sp.getString("token", "") ?: ""
+        phoneId = sp.getString("phoneId", "") ?: ""
+        if (phoneId.isBlank()) { phoneId = PK.hex(PK.random(16)); sp.edit().putString("phoneId", phoneId).apply() }
+        pairings = try {
+            val a = JSONArray(sp.getString("pairings", "[]"))
+            (0 until a.length()).map { a.getJSONObject(it).let { o -> Paired(o.getString("mid"), o.optString("name"), o.getString("secret")) } }
+        } catch (_: Exception) { emptyList() }
+        insertPaste = sp.getBoolean("insertPaste", true)
+        quality = sp.getInt("quality", 0)
         sens = sp.getFloat("sens", 1.0f)
         scrollSpeed = sp.getFloat("scrollSpeed", 1.2f)
         natural = sp.getBoolean("natural", true)
@@ -48,12 +63,27 @@ object Prefs {
     fun save() {
         if (!::sp.isInitialized) return
         sp.edit()
-            .putString("host", host).putInt("port", port).putString("token", token)
+            .putString("host", host).putInt("port", port)
+            .putBoolean("insertPaste", insertPaste).putInt("quality", quality)
             .putFloat("sens", sens).putFloat("scrollSpeed", scrollSpeed)
             .putBoolean("natural", natural).putBoolean("strips", strips)
             .putBoolean("haptics", haptics).putBoolean("returnAfter", returnAfter)
             .putString("geminiKey", geminiKey).putString("dictionary", dictionary).putBoolean("phoneMic", phoneMic)
             .putBoolean("screen", screen).putInt("display", display).putBoolean("follow", follow)
             .apply()
+    }
+
+    fun addPairing(p: Paired) {
+        pairings = pairings.filter { it.mid != p.mid } + p
+        savePairings()
+    }
+
+    fun forgetPairings() { pairings = emptyList(); savePairings() }
+
+    private fun savePairings() {
+        if (!::sp.isInitialized) return
+        val a = JSONArray()
+        pairings.forEach { a.put(JSONObject().put("mid", it.mid).put("name", it.name).put("secret", it.secret)) }
+        sp.edit().putString("pairings", a.toString()).apply()
     }
 }

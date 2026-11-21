@@ -72,7 +72,11 @@ fun ScreenView(modifier: Modifier = Modifier) {
             Text(
                 when {
                     !connected -> "Connect to a Mac to see its screen"
-                    !PadClient.screenOk -> "Mac has no Screen Recording permission.\nMac menu bar > PadKey > Screen Recording > enable, then toggle the 🖥 button."
+                    PadClient.screenReason == "no_permission" ->
+                        "Mac has no Screen Recording permission.\nMac menu bar > PadKey > Screen Recording > enable, then toggle the 🖥 button."
+                    PadClient.screenReason == "needs_relaunch" ->
+                        "Screen Recording is granted but capture needs a restart.\nMac menu bar > PadKey > \"Relaunch PadKey to enable Screen Recording\"."
+                    !PadClient.screenOk -> "Screen capture failed on the Mac.\nToggle the 🖥 button; if it persists relaunch PadKey on the Mac."
                     else -> "Waiting for the Mac screen..."
                 },
                 color = Color(0xFF9A9CA3), fontSize = 12.sp, modifier = Modifier.align(Alignment.Center).padding(16.dp),
@@ -81,7 +85,7 @@ fun ScreenView(modifier: Modifier = Modifier) {
         Row(Modifier.align(Alignment.TopEnd).padding(4.dp)) {
             MirrorChip(if (Prefs.follow) "◎ Follow" else "○ Follow", Prefs.follow) { Prefs.follow = !Prefs.follow; Prefs.save() }
             if (zoom > 1.02f) {
-                Box(Modifier.padding(start = 4.dp)) { MirrorChip("%.1fx".format(zoom), false) { view?.resetZoom() } }
+                Box(Modifier.padding(start = 4.dp)) { MirrorChip("%.1fx  ✕ reset".format(zoom), true) { view?.resetZoom() } }
             }
         }
     }
@@ -135,7 +139,7 @@ class ScreenSurface(ctx: Context) : TextureView(ctx), TextureView.SurfaceTexture
         onFrame(false)
         val s = surface
         if (host.isNotEmpty() && s != null) {
-            decoder = Decoder(s, host, Prefs.token,
+            decoder = Decoder(s, host,
                 onSize = { w, h -> main.post { if (h > 0) { videoAspect = w.toFloat() / h; aspect = videoAspect; applyMatrix() } } },
                 onFrame = { main.post { onFrame(true) } }).also { it.start() }
         }
@@ -212,53 +216,112 @@ class ScreenSurface(ctx: Context) : TextureView(ctx), TextureView.SurfaceTexture
     }
 
     // ----- touch -----
+    // 1 finger: tap = click, double-tap = double-click, long-press = right-click, drag = mouse drag.
+    // 2 fingers: pinch = zoom, drag = pan (when zoomed).
 
     private val slop = ViewConfiguration.get(ctx).scaledTouchSlop.toFloat()
-    private var downX = 0f; private var downY = 0f; private var lastX = 0f; private var lastY = 0f
+    private var downX = 0f; private var downY = 0f
     private var downT = 0L; private var moved = false; private var multi = false
-    private var lastTapT = 0L; private var lastTapX = 0f; private var lastTapY = 0f
+    private var dragging = false; private var longFired = false; private var lastSendT = 0L
+    private var lastTapT = 0L; private var lastTapX = 0f; private var lastTapY = 0f; private var lastTapCount = 0
+    private var focusX = 0f; private var focusY = 0f
+    private val longPress = Runnable {
+        if (!moved && !multi && !dragging) {
+            val p = norm(downX, downY) ?: return@Runnable
+            longFired = true
+            PadClient.moveTo(p.first, p.second)
+            PadClient.click("right")
+            Mods.consume()
+            Haptics.tick(context, strong = true)
+        }
+    }
     private val scaler = ScaleGestureDetector(ctx, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(d: ScaleGestureDetector): Boolean { zoomAt(zoom * d.scaleFactor, d.focusX, d.focusY); return true }
     })
+
+    /** View point -> 0..1 on the Mac display, or null outside the video. */
+    private fun norm(x: Float, y: Float): Pair<Float, Float>? {
+        val c = content()
+        val nx = (x - c[0]) / c[2]; val ny = (y - c[1]) / c[3]
+        return if (nx in 0f..1f && ny in 0f..1f) Pair(nx, ny) else null
+    }
+
+    private fun midpoint(e: MotionEvent, skip: Int = -1): FloatArray {
+        var sx = 0f; var sy = 0f; var n = 0
+        for (i in 0 until e.pointerCount) if (i != skip) { sx += e.getX(i); sy += e.getY(i); n++ }
+        return floatArrayOf(sx / max(n, 1), sy / max(n, 1))
+    }
+
+    private fun endDrag(x: Float, y: Float) {
+        if (!dragging) return
+        norm(x, y)?.let { PadClient.moveTo(it.first, it.second) }
+        PadClient.button("left", false)
+        dragging = false
+        Mods.consume()
+    }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         scaler.onTouchEvent(e)
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 parent?.requestDisallowInterceptTouchEvent(true)
-                downX = e.x; downY = e.y; lastX = e.x; lastY = e.y
-                downT = e.eventTime; moved = false; multi = false
+                downX = e.x; downY = e.y
+                downT = e.eventTime; moved = false; multi = false; dragging = false; longFired = false
+                main.removeCallbacks(longPress)
+                main.postDelayed(longPress, 500)
             }
-            MotionEvent.ACTION_POINTER_DOWN -> multi = true
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                main.removeCallbacks(longPress)
+                if (!multi) { multi = true; endDrag(e.x, e.y) }
+                val m = midpoint(e); focusX = m[0]; focusY = m[1]
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                val m = midpoint(e, skip = e.actionIndex); focusX = m[0]; focusY = m[1]
+            }
             MotionEvent.ACTION_MOVE -> {
-                if (multi || scaler.isInProgress) { multi = true; return true }
-                if (!moved && (abs(e.x - downX) > slop || abs(e.y - downY) > slop)) moved = true
-                if (moved && zoom > 1.02f) {
-                    panX += e.x - lastX; panY += e.y - lastY
-                    applyMatrix()
+                if (multi) {
+                    val m = midpoint(e)
+                    if (zoom > 1.02f) { panX += m[0] - focusX; panY += m[1] - focusY; applyMatrix() }
+                    focusX = m[0]; focusY = m[1]
+                    return true
                 }
-                lastX = e.x; lastY = e.y
+                if (longFired) return true
+                if (!moved && (abs(e.x - downX) > slop || abs(e.y - downY) > slop)) {
+                    moved = true
+                    main.removeCallbacks(longPress)
+                    // grab the point that was touched, then follow the finger
+                    norm(downX, downY)?.let {
+                        PadClient.moveTo(it.first, it.second)
+                        PadClient.button("left", true)
+                        dragging = true
+                        Haptics.tick(context)
+                    }
+                }
+                if (dragging && e.eventTime - lastSendT >= 8) {
+                    lastSendT = e.eventTime
+                    norm(e.x, e.y)?.let { PadClient.moveTo(it.first, it.second) }
+                }
             }
             MotionEvent.ACTION_UP -> {
-                if (!moved && !multi && e.eventTime - downT < 400) tap(e.x, e.y, e.eventTime)
+                main.removeCallbacks(longPress)
+                if (dragging) endDrag(e.x, e.y)
+                else if (!moved && !multi && !longFired && e.eventTime - downT < 500) tap(e.x, e.y, e.eventTime)
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                main.removeCallbacks(longPress)
+                if (dragging) endDrag(e.x, e.y)
             }
         }
         return true
     }
 
     private fun tap(x: Float, y: Float, t: Long) {
-        if (t - lastTapT < 300 && abs(x - lastTapX) < slop * 4 && abs(y - lastTapY) < slop * 4) {
-            // double-tap: toggle zoom (the first tap already clicked)
-            lastTapT = 0
-            if (zoom > 1.02f) { zoom = 1f; panX = 0f; panY = 0f; applyMatrix() } else zoomAt(2.5f, x, y)
-            return
-        }
-        lastTapT = t; lastTapX = x; lastTapY = y
-        val c = content()
-        val nx = (x - c[0]) / c[2]; val ny = (y - c[1]) / c[3]
-        if (nx !in 0f..1f || ny !in 0f..1f) return
-        PadClient.moveTo(nx, ny)
-        PadClient.click("left")
+        val p = norm(x, y) ?: return
+        val second = lastTapCount > 0 && t - lastTapT < 300 && abs(x - lastTapX) < slop * 4 && abs(y - lastTapY) < slop * 4
+        val count = if (second) min(lastTapCount + 1, 3) else 1
+        lastTapT = t; lastTapX = x; lastTapY = y; lastTapCount = count
+        PadClient.moveTo(p.first, p.second)
+        PadClient.click("left", count)   // 2nd tap = clickState 2: a real double-click on the Mac
         Mods.consume()
         Haptics.tick(context)
     }
@@ -266,7 +329,7 @@ class ScreenSurface(ctx: Context) : TextureView(ctx), TextureView.SurfaceTexture
 
 /** TCP reader + MediaCodec H.264 decoder rendering to [surface]. Reconnects until shut down. */
 private class Decoder(
-    val surface: Surface, val host: String, val token: String,
+    val surface: Surface, val host: String,
     val onSize: (Int, Int) -> Unit, val onFrame: () -> Unit,
 ) : Thread("padkey-video") {
     @Volatile private var stop = false
@@ -296,14 +359,24 @@ private class Decoder(
     }
 
     private fun runOnce() {
+        val secret = PadClient.sessionSecret ?: throw java.io.IOException("not connected")
         val s = Socket()
         sock = s
         s.tcpNoDelay = true
         s.connect(InetSocketAddress(host, 50506), 2500)
-        s.getOutputStream().apply {
-            write((JSONObject().put("t", "hello").put("token", token).toString() + "\n").toByteArray()); flush()
-        }
-        val input = DataInputStream(s.getInputStream().buffered(1 shl 16))
+        s.soTimeout = 6000
+        val out = s.getOutputStream()
+        val nc = PK.random(16)
+        out.write((JSONObject().put("t", "hello").put("v", PK.VERSION).put("id", Prefs.phoneId)
+            .put("n", PK.b64(nc)).toString() + "\n").toByteArray()); out.flush()
+        val input = DataInputStream(java.io.BufferedInputStream(s.getInputStream(), 1 shl 16))
+        val reply = JSONObject(PK.readLine(input))
+        if (reply.optString("t") == "error") throw java.io.IOException(reply.optString("msg"))
+        val ns = PK.unb64(reply.getString("n"))
+        if (!PK.eq(PK.unb64(reply.getString("auth")), PK.macAuth(secret, "video", nc, ns))) throw java.io.IOException("Mac not verified")
+        val ch = Channel(secret, nc, ns, "video")
+        out.write(ch.seal("{\"t\":\"ready\"}".toByteArray())); out.flush()   // first frame proves we hold the secret
+        s.soTimeout = 0
         val c = newCodec()
         codec = c
         val outThread = Thread {
@@ -327,16 +400,13 @@ private class Decoder(
             } catch (_: Exception) { }
         }.also { it.isDaemon = true; it.start() }
 
-        var buf = ByteArray(1 shl 18)
         while (!stop) {
-            val n = input.readInt()
-            if (n <= 0 || n > 8_000_000) throw java.io.IOException("bad frame length $n")
-            if (buf.size < n) buf = ByteArray(n)
-            input.readFully(buf, 0, n)
-            var idx = c.dequeueInputBuffer(50_000)
+            val au = ch.readFrame(input, 8_000_000)   // decrypts; throws on forgery/replay
+            val n = au.size
+            val idx = c.dequeueInputBuffer(50_000)
             if (idx < 0) continue // decoder backed up: drop; next keyframe resyncs
             val bb = c.getInputBuffer(idx) ?: continue
-            bb.clear(); bb.put(buf, 0, n)
+            bb.clear(); bb.put(au, 0, n)
             c.queueInputBuffer(idx, 0, n, System.nanoTime() / 1000, 0)
         }
     }

@@ -107,6 +107,7 @@ fun App() {
             .statusBarsPadding().navigationBarsPadding().imePadding(),
     ) {
         TopBar(typing, { typing = !typing }, { showConnect = true }, { showSettings = true }, ::toggleScreen, { showDisplays = true })
+        PendingBar()
         val keys: @Composable (Modifier) -> Unit = { m -> if (typing) TypePanel(m) else KeyboardPanel(m) }
         if (landscape) {
             Row(Modifier.weight(1f).fillMaxWidth().padding(4.dp)) {
@@ -137,6 +138,68 @@ fun App() {
     if (showDisplays) DisplayDialog { showDisplays = false }
     if (showConnect) ConnectDialog { showConnect = false }
     if (showSettings) SettingsDialog { showSettings = false }
+    if (PadClient.needPin) PinDialog()
+}
+
+@Composable
+private fun SmallChip(label: String, onClick: () -> Unit) {
+    Box(
+        Modifier.height(28.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF2B2D33))
+            .clickable { onClick() }.padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(label, fontSize = 12.sp, color = Color.White) }
+}
+
+/** Text that has not been acknowledged by the Mac yet (offline / send failed), and failed transcriptions. */
+@Composable
+private fun PendingBar() {
+    val items = Outbox.items
+    val failed = Voice.failedAudio
+    if (items.isEmpty() && failed == null) return
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 2.dp).clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFF3A2A12)).padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (items.isNotEmpty()) {
+            Text("Pending (${items.size}): " + Outbox.joined().replace('\n', ' ').take(160), fontSize = 12.sp, maxLines = 2,
+                overflow = TextOverflow.Ellipsis, color = Color(0xFFFFD9A8))
+            if (Outbox.note.isNotEmpty()) Text(Outbox.note, fontSize = 11.sp, color = Color(0xFFB89868))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (PadClient.connected) SmallChip("Send now") { Outbox.sendNow() }
+                SmallChip("Copy") { Outbox.copy() }
+                SmallChip("Discard") { Outbox.discard() }
+            }
+        }
+        if (failed != null) {
+            Text(Voice.status.ifEmpty { "Transcription failed" }, fontSize = 12.sp, maxLines = 2, color = Color(0xFFFFD9A8))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SmallChip("Retry transcription") { Voice.retry() }
+                SmallChip("Dismiss") { Voice.failedAudio = null }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PinDialog() {
+    var pin by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = { PadClient.cancelPairing() },
+        title = { Text("Pair with your Mac") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("On the Mac click the PadKey keyboard icon in the menu bar, choose \"Pair new phone...\" and type the 6-digit PIN it shows (valid 2 minutes).", fontSize = 13.sp)
+                Text("Mac: ${PadClient.pairHost}", fontSize = 12.sp, color = Color(0xFF9A9CA3))
+                OutlinedTextField(pin, { pin = it.filter(Char::isDigit).take(6) }, singleLine = true, label = { Text("PIN") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword), modifier = Modifier.fillMaxWidth())
+                if (PadClient.pairError.isNotEmpty()) Text(PadClient.pairError, fontSize = 13.sp, color = Color(0xFFE5484D))
+                if (PadClient.pairBusy) Text("Pairing...", fontSize = 12.sp)
+            }
+        },
+        confirmButton = { Button(enabled = pin.length == 6 && !PadClient.pairBusy, onClick = { PadClient.pair(pin) }) { Text("Pair") } },
+        dismissButton = { TextButton(onClick = { PadClient.cancelPairing() }) { Text("Cancel") } },
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -215,8 +278,7 @@ private fun TypePanel(modifier: Modifier) {
     LaunchedEffect(Unit) { try { focus.requestFocus() } catch (_: Exception) { } }
     fun send() {
         if (text.isNotEmpty()) {
-            PadClient.text(text)
-            if (Prefs.returnAfter) PadClient.tap(VK.RETURN)
+            Outbox.submit(text, Prefs.returnAfter)   // kept (and shown as pending) until the Mac confirms it
             text = ""
         } else PadClient.tap(VK.RETURN)
     }
@@ -242,7 +304,6 @@ private fun TypePanel(modifier: Modifier) {
 private fun ConnectDialog(onClose: () -> Unit) {
     var host by remember { mutableStateOf(Prefs.host) }
     var port by remember { mutableStateOf(Prefs.port.toString()) }
-    var token by remember { mutableStateOf(Prefs.token) }
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Connect to Mac") },
@@ -252,7 +313,7 @@ private fun ConnectDialog(onClose: () -> Unit) {
                 PadClient.found.forEach { m ->
                     Row(
                         Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).background(Color(0xFF2B2D33))
-                            .clickable { Prefs.token = token; PadClient.connect(m.ip, m.port); onClose() }.padding(12.dp),
+                            .clickable { PadClient.connect(m.ip, m.port); onClose() }.padding(12.dp),
                     ) { Text("${m.name}  ${m.ip}", fontSize = 14.sp) }
                 }
                 Text("Or enter IP manually:", fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
@@ -260,13 +321,13 @@ private fun ConnectDialog(onClose: () -> Unit) {
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(port, { port = it.filter(Char::isDigit) }, singleLine = true, label = { Text("Port") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(token, { token = it }, singleLine = true, label = { Text("Token (only if you set one)") },
-                    modifier = Modifier.fillMaxWidth())
+                Text("Paired Macs: " + (Prefs.pairings.joinToString { it.name }.ifEmpty { "none" }), fontSize = 12.sp, color = Color(0xFF9A9CA3))
+                OutlinedButton(onClick = { PadClient.beginPairing(host.trim().ifEmpty { Prefs.host }, port.toIntOrNull() ?: 50505); onClose() },
+                    modifier = Modifier.fillMaxWidth()) { Text("Pair with PIN...") }
             }
         },
         confirmButton = {
             Button(onClick = {
-                Prefs.token = token
                 PadClient.connect(host.trim(), port.toIntOrNull() ?: 50505)
                 onClose()
             }) { Text("Connect") }
@@ -295,16 +356,41 @@ private fun SettingsDialog(onClose: () -> Unit) {
                 SwitchRow("Left/right click strips", Prefs.strips) { Prefs.strips = it; Prefs.save() }
                 SwitchRow("Haptic feedback", Prefs.haptics) { Prefs.haptics = it; Prefs.save() }
                 SwitchRow("Press Return after typed text", Prefs.returnAfter) { Prefs.returnAfter = it; Prefs.save() }
+                ChoiceRow("Insert text by", listOf("Paste", "Type keystrokes"), if (Prefs.insertPaste) 0 else 1) { Prefs.insertPaste = it == 0; Prefs.save() }
+                ChoiceRow("Mirror quality", listOf("Standard", "Sharp"), Prefs.quality) {
+                    Prefs.quality = it; Prefs.save()
+                    if (Prefs.screen) PadClient.screen(true, Prefs.display)
+                }
                 SwitchRow("Mic button uses phone mic (off = Mac DScribe)", Prefs.phoneMic) { Prefs.phoneMic = it; Prefs.save() }
                 OutlinedTextField(Prefs.geminiKey, { Prefs.geminiKey = it; Prefs.save() }, singleLine = true,
                     label = { Text("Gemini API key") }, modifier = Modifier.fillMaxWidth(),
                     visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
                 OutlinedTextField(Prefs.dictionary, { Prefs.dictionary = it; Prefs.save() },
                     label = { Text("Dictionary (comma-separated terms)") }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+                if (Prefs.pairings.isNotEmpty()) {
+                    TextButton(onClick = { Prefs.forgetPairings() }) { Text("Forget paired Macs (${Prefs.pairings.size})") }
+                }
             }
         },
         confirmButton = { TextButton(onClick = { Prefs.save(); onClose() }) { Text("Done") } },
     )
+}
+
+@Composable
+private fun ChoiceRow(label: String, options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text(label, fontSize = 14.sp)
+        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            options.forEachIndexed { i, o ->
+                Box(
+                    Modifier.height(32.dp).clip(RoundedCornerShape(16.dp))
+                        .background(if (i == selected) MaterialTheme.colorScheme.primary else Color(0xFF2B2D33))
+                        .clickable { onSelect(i) }.padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.Center,
+                ) { Text(o, fontSize = 13.sp, color = if (i == selected) Color.Black else Color.White) }
+            }
+        }
+    }
 }
 
 @Composable
@@ -315,17 +401,20 @@ private fun SwitchRow(label: String, value: Boolean, onChange: (Boolean) -> Unit
     }
 }
 
-/** Dictation button. Phone mic mode: record on phone -> Gemini -> typed on Mac.
+/** Dictation button. Phone mic mode: record on phone -> Gemini -> pasted/typed on Mac (kept until the Mac confirms).
  *  Mac DScribe mode: holds Right Option (keycode 61) so DScribe on the Mac listens.
- *  Hold = push-to-talk. Quick tap = lock on (hands-free); tap again to stop. */
+ *  Hold = push-to-talk. Quick tap = lock on (hands-free); tap again to stop. Recording auto-stops at 8 minutes. */
 @Composable
 private fun DictateButton() {
     val ctx = LocalContext.current
-    var on by remember { mutableStateOf(false) }
+    var held by remember { mutableStateOf(false) }      // DScribe mode: Right Option is down
     var locked by remember { mutableStateOf(false) }
     fun begin(): Boolean = if (Prefs.phoneMic) Voice.start() else { PadClient.key(61, true); true }
     fun finish() { if (Prefs.phoneMic) Voice.stop() else PadClient.key(61, false) }
     val busy = Voice.state == VoiceState.Processing
+    // Phone mic: the recording itself is the truth (it can stop on its own at the time limit).
+    val on = if (Prefs.phoneMic) Voice.state == VoiceState.Recording else held
+    val showLocked = locked && on
     Box(
         Modifier.height(32.dp).width(48.dp).clip(CircleShape)
             .background(when { on -> Color(0xFFE5484D); busy -> Color(0xFFFFB300); else -> Color(0xFF2B2D33) })
@@ -333,18 +422,20 @@ private fun DictateButton() {
                 awaitEachGesture {
                     awaitFirstDown().consume()
                     Haptics.tick(ctx, strong = true)
-                    if (locked) {
-                        finish(); locked = false; on = false
+                    val stillOn = if (Prefs.phoneMic) Voice.state == VoiceState.Recording else held
+                    if (locked && stillOn) {
+                        finish(); locked = false; held = false
                         waitForUpOrCancellation(); return@awaitEachGesture
                     }
+                    locked = false
                     if (!begin()) { waitForUpOrCancellation(); return@awaitEachGesture }
-                    on = true
+                    held = true
                     val t0 = System.currentTimeMillis()
                     waitForUpOrCancellation()
                     if (System.currentTimeMillis() - t0 < 350) { locked = true }
-                    else { finish(); on = false; Haptics.tick(ctx) }
+                    else { finish(); held = false; Haptics.tick(ctx) }
                 }
             },
         contentAlignment = Alignment.Center,
-    ) { Text(when { locked -> "■ Stop"; busy -> "…"; else -> "🎤" }, fontSize = if (locked) 11.sp else 15.sp, color = Color.White) }
+    ) { Text(when { showLocked -> "■ Stop"; busy -> "…"; else -> "🎤" }, fontSize = if (showLocked) 11.sp else 15.sp, color = Color.White) }
 }

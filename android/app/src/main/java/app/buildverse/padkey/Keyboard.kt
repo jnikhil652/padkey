@@ -103,7 +103,7 @@ private val numCodes = intArrayOf(18, 19, 20, 21, 23, 22, 26, 28, 25, 29)
 private val layer0: List<List<KeyDef>> = listOf(
     "1234567890".mapIndexed { i, c -> ch(c.toString(), numCodes[i]) },
     letters("qwertyuiop", intArrayOf(12, 13, 14, 15, 17, 16, 32, 34, 31, 35)),
-    listOf(spacer(0.5f)) + letters("asdfghjkl", intArrayOf(0, 1, 2, 3, 5, 4, 38, 40, 37)) + spacer(0.5f),
+    listOf(KeyDef("⇪", 57, 1f)) + letters("asdfghjkl", intArrayOf(0, 1, 2, 3, 5, 4, 38, 40, 37)),
     listOf(KeyDef("⇧", VK.SHIFT, 1.5f, kind = Kind.Mod)) +
         letters("zxcvbnm", intArrayOf(6, 7, 8, 9, 11, 45, 46)) +
         KeyDef("⌫", VK.DELETE, 1.5f),
@@ -207,7 +207,12 @@ private fun KeyCap(k: KeyDef, modifier: Modifier, shiftOn: Boolean, onLayer: (In
     var pressed by remember { mutableStateOf(false) }
     val curK = rememberUpdatedState(k)
     val curLayer = rememberUpdatedState(onLayer)
-    val modState = if (k.kind == Kind.Mod) Mods.of(k.code) else ModLevel.Off
+    val capsKey = k.code == 57 && k.kind == Kind.Normal
+    val modState = when {
+        k.kind == Kind.Mod -> Mods.of(k.code)
+        capsKey && PadClient.capsOn -> ModLevel.Locked   // Caps Lock shows as locked while the Mac has it on
+        else -> ModLevel.Off
+    }
 
     val bg = when {
         modState == ModLevel.Locked -> Accent
@@ -217,7 +222,7 @@ private fun KeyCap(k: KeyDef, modifier: Modifier, shiftOn: Boolean, onLayer: (In
         k.letter || k.label.length == 1 -> KeyBg
         else -> KeyBgSpecial
     }
-    val label = if (k.letter && shiftOn) k.label.uppercase() else k.label
+    val label = if (k.letter && (shiftOn || PadClient.capsOn)) k.label.uppercase() else k.label
 
     Box(Modifier.then(modifier).padding(2.dp)) {
         Box(

@@ -70,6 +70,10 @@ fun Touchpad(modifier: Modifier = Modifier) {
                     var moved = false
                     var dragging = false
                     var scrolling = false
+                    var pinching = false
+                    var dist0 = 0f
+                    var lastStepDist = 0f
+                    var c0 = Offset.Zero
                     var swiped = false
                     var prevCount = 1
                     var accX = 0f
@@ -126,7 +130,26 @@ fun Touchpad(modifier: Modifier = Modifier) {
                             }
                             maxP == 2 -> {
                                 travel += hypot(dx, dy)
-                                if (!scrolling && travel > slop * 1.6f) scrolling = true
+                                if (pressed.size >= 2) {
+                                    // Spreading/closing the fingers = pinch (Cmd+ / Cmd-); moving them together = scroll.
+                                    val d = (pressed[0].position - pressed[1].position).getDistance()
+                                    val cen = (pressed[0].position + pressed[1].position) / 2f
+                                    if (dist0 == 0f) { dist0 = d; lastStepDist = d; c0 = cen }
+                                    if (!pinching && !scrolling) {
+                                        val dd = abs(d - dist0)
+                                        val dc = (cen - c0).getDistance()
+                                        if (dd > 18f * density && dd > dc) pinching = true
+                                        else if (dc > slop * 1.6f && dc >= dd) scrolling = true
+                                    }
+                                    if (pinching) {
+                                        val ratio = d / max(lastStepDist, 1f)
+                                        if (ratio > 1.25f || ratio < 0.8f) {
+                                            Haptics.tick(ctx)
+                                            PadClient.combo(intArrayOf(VK.CMD), if (ratio > 1f) 24 else 27)   // = / -
+                                            lastStepDist = d
+                                        }
+                                    }
+                                }
                                 if (scrolling) {
                                     val sgn = if (Prefs.natural) 1f else -1f
                                     val k = Prefs.scrollSpeed * sgn
@@ -165,7 +188,7 @@ fun Touchpad(modifier: Modifier = Modifier) {
                         Haptics.tick(ctx)
                         lastTapUp = lastUp; lastTapPos = first.position; lastTapCount = c
                         Mods.consume()
-                    } else if (maxP == 2 && !scrolling && dur < 350) {
+                    } else if (maxP == 2 && !scrolling && !pinching && dur < 350) {
                         PadClient.click("right", 1)
                         Haptics.tick(ctx)
                         lastTapCount = 0
@@ -190,7 +213,7 @@ fun Touchpad(modifier: Modifier = Modifier) {
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                "1 finger: move/tap/tap-hold drag   2: scroll/right-click   3: swipe",
+                "1 finger: move/tap/tap-hold drag   2: scroll, pinch = zoom, tap = right-click   3: swipe",
                 color = Color(0xFF4A4D55), fontSize = 11.sp, modifier = Modifier.padding(12.dp),
             )
         }
