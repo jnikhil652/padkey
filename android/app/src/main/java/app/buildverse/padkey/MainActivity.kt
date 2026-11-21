@@ -236,6 +236,8 @@ private fun TopBar(
         Spacer(Modifier.width(4.dp))
         DictateButton()
         Spacer(Modifier.width(4.dp))
+        BarChip("☀") { PadClient.wake() }
+        Spacer(Modifier.width(4.dp))
         BarChip("🖥", active = Prefs.screen, onLong = onDisplays, onClick = onScreen)
         Spacer(Modifier.width(4.dp))
         BarChip(if (PadClient.found.isNotEmpty() && !PadClient.connected) "Connect·${PadClient.found.size}" else "Connect", onClick = onConnect)
@@ -317,7 +319,7 @@ private fun ConnectDialog(onClose: () -> Unit) {
                     ) { Text("${m.name}  ${m.ip}", fontSize = 14.sp) }
                 }
                 Text("Or enter IP manually:", fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
-                OutlinedTextField(host, { host = it }, singleLine = true, label = { Text("Mac IP (e.g. 192.168.1.20)") },
+                OutlinedTextField(host, { host = it }, singleLine = true, label = { Text("Mac IP or Tailscale name (e.g. 192.168.1.20)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(port, { port = it.filter(Char::isDigit) }, singleLine = true, label = { Text("Port") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())

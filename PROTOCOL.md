@@ -87,6 +87,7 @@ show latency). The Mac drops a connection silent for 12 s and releases every hel
 | `paste` | `s`, `id`, `enter` | Insert `s` through the clipboard: save every pasteboard item/type, set the text (marked transient for clipboard managers), post Cmd+V, restore ~400 ms later (skipped if the clipboard changed meanwhile). |
 | `media` | `k` | System key press: `volup voldown mute brightup brightdown play next prev fast rewind kbup kbdown`. |
 | `release` | - | Release all held keys/buttons. |
+| `wake` | - | Wake the display (declares user activity). Shows the lock screen if the Mac is locked; cannot wake a Mac in full system sleep. |
 
 `text` / `paste` carry a random `id` (<= 2^53). The Mac answers `{"t":"ack","id":<id>}` once the text was posted. The phone keeps
 unacknowledged text and re-sends it after a reconnect; the Mac remembers the last 64 ids and re-acks a duplicate without typing it again.

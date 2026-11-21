@@ -312,6 +312,7 @@ object PadClient {
     fun button(b: String, down: Boolean) = send("{\"t\":\"btn\",\"b\":\"$b\",\"d\":$down}")
     fun click(b: String, n: Int = 1) = send("{\"t\":\"click\",\"b\":\"$b\",\"n\":$n}")
     fun key(code: Int, down: Boolean, flags: Int = 0) = send("{\"t\":\"key\",\"c\":$code,\"d\":$down,\"f\":$flags}")
+    fun wake() = send("{\"t\":\"wake\"}")
     fun media(k: String) = send("{\"t\":\"media\",\"k\":\"$k\"}")
     /** Text (dictation, Type mode) with an id the Mac acknowledges; see [Outbox]. Paste or keystrokes per setting. */
     fun sendText(p: Pending) {

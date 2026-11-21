@@ -44,7 +44,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let e = server.listenerError {
             add(menu, "Server error: \(e)")
         } else {
-            for ip in Net.ipv4Addresses() { add(menu, "\(ip):\(Server.port)", action: #selector(copyAddr(_:)), obj: "\(ip):\(Server.port)") }
+            for ip in Net.ipv4Addresses() {
+                let label = Net.isTailscale(ip) ? "\(ip):\(Server.port)  (Tailscale)" : "\(ip):\(Server.port)"
+                add(menu, label, action: #selector(copyAddr(_:)), obj: "\(ip):\(Server.port)")
+            }
             add(menu, "Bonjour: _padkey._tcp")
         }
         menu.addItem(.separator())
@@ -169,12 +172,20 @@ enum Net {
             let i = p.pointee
             guard let a = i.ifa_addr, a.pointee.sa_family == UInt8(AF_INET) else { continue }
             let name = String(cString: i.ifa_name)
-            guard name.hasPrefix("en") else { continue }
+            guard name.hasPrefix("en") || name.hasPrefix("utun") else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             getnameinfo(a, socklen_t(a.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
-            out.append(String(cString: host))
+            let ip = String(cString: host)
+            if name.hasPrefix("utun") && !isTailscale(ip) { continue } // other VPN tunnels
+            out.append(ip)
         }
         return out
+    }
+
+    /// Tailscale hands out addresses from the CGNAT range 100.64.0.0/10.
+    static func isTailscale(_ ip: String) -> Bool {
+        let p = ip.split(separator: ".").compactMap { Int($0) }
+        return p.count == 4 && p[0] == 100 && (64...127).contains(p[1])
     }
 }
 

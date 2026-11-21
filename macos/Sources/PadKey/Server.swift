@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import CryptoKit
 import Foundation
+import IOKit.pwr_mgt
 import Network
 
 /// TCP server (protocol v2, see ../../PROTOCOL.md): a plaintext hello/pair phase, then AES-256-GCM frames.
@@ -331,6 +332,11 @@ private final class Conn {
             if t == "paste" { inj.paste(s, enter: enter, done: ack) } else { inj.text(s, enter: enter, done: ack) }
         case "media": if let k = o["k"] as? String { inj.media(k) }
         case "release": inj.releaseAll()
+        case "wake": // wake the display (as if the user touched the Mac); shows the lock screen if locked
+            var aid: IOPMAssertionID = 0
+            if IOPMAssertionDeclareUserActivity("PadKey wake" as CFString, kIOPMUserActiveLocal, &aid) == kIOReturnSuccess {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) { IOPMAssertionRelease(aid) }
+            }
         case "screen":
             let on = (o["on"] as? NSNumber)?.boolValue ?? true
             if on && !CGPreflightScreenCaptureAccess() { _ = CGRequestScreenCaptureAccess() }
