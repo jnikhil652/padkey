@@ -1,0 +1,93 @@
+name: Release
+# Push a tag like v2.0.1 to build the Android APK and the Mac app and attach both to a GitHub Release.
+# Signing is optional: with the secrets below the artifacts are signed with your keys, without them the APK is
+# debug-signed and the Mac app ad-hoc signed (works, but permissions/updates behave worse). See README "Releases".
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Prepare release keystore
+        # Optional secrets: PADKEY_KEYSTORE_BASE64 (base64 .jks), PADKEY_KEYSTORE_PASSWORD, PADKEY_KEY_ALIAS, PADKEY_KEY_PASSWORD.
+        env:
+          KS: ${{ secrets.PADKEY_KEYSTORE_BASE64 }}
+        if: env.KS != ''
+        run: |
+          echo "$KS" | base64 --decode > "$RUNNER_TEMP/padkey.jks"
+          echo "PADKEY_KEYSTORE=$RUNNER_TEMP/padkey.jks" >> "$GITHUB_ENV"
+          echo "APK_SUFFIX=" >> "$GITHUB_ENV"
+      - name: Mark debug-signed fallback
+        env:
+          KS: ${{ secrets.PADKEY_KEYSTORE_BASE64 }}
+        if: env.KS == ''
+        run: echo "APK_SUFFIX=-debugsigned" >> "$GITHUB_ENV"
+      - name: Build release APK
+        working-directory: android
+        env:
+          PADKEY_KEYSTORE_PASSWORD: ${{ secrets.PADKEY_KEYSTORE_PASSWORD }}
+          PADKEY_KEY_ALIAS: ${{ secrets.PADKEY_KEY_ALIAS }}
+          PADKEY_KEY_PASSWORD: ${{ secrets.PADKEY_KEY_PASSWORD }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ./gradlew assembleRelease -PversionName="$VERSION" -PversionCode="$GITHUB_RUN_NUMBER"
+      - name: Name the APK
+        run: cp android/app/build/outputs/apk/release/app-release.apk "PadKey-${GITHUB_REF_NAME}-android${APK_SUFFIX}.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: PadKey-*.apk
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Import signing certificate
+        # Optional secrets: PADKEY_SIGNING_P12_BASE64 (base64 .p12 made by macos/make-signing-cert.sh) + PADKEY_SIGNING_P12_PASSWORD.
+        # A stable identity keeps Accessibility / Screen Recording grants across updates.
+        env:
+          P12: ${{ secrets.PADKEY_SIGNING_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.PADKEY_SIGNING_P12_PASSWORD }}
+        if: env.P12 != ''
+        run: |
+          KC="$RUNNER_TEMP/sign.keychain-db"
+          security create-keychain -p ci "$KC"
+          security set-keychain-settings "$KC"
+          security unlock-keychain -p ci "$KC"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KC"
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+      - name: Build app
+        working-directory: macos
+        run: VERSION="${GITHUB_REF_NAME#v}" BUILD_NUMBER="$GITHUB_RUN_NUMBER" ./build.sh
+      - name: Package
+        run: |
+          ditto -c -k --keepParent macos/build/PadKey.app "PadKey-${GITHUB_REF_NAME}-mac.zip"
+          hdiutil create -volname PadKey -srcfolder macos/build/PadKey.app -ov -format UDZO "PadKey-${GITHUB_REF_NAME}-mac.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: |
+            PadKey-*.zip
+            PadKey-*.dmg
+  release:
+    needs: [android, mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

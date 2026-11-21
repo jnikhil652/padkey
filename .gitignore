@@ -5,3 +5,8 @@ android/build/
 android/app/build/
 android/local.properties
 .DS_Store
+__pycache__/
+*.pyc
+*.jks
+*.keystore
+*.p12

@@ -2,7 +2,7 @@
 # Builds build/PadKey.app. Usage: ./build.sh [--install]
 # Signs with the stable self-signed identity "PadKey Self-Signed" (create it once with ./make-signing-cert.sh)
 # so Accessibility / Screen Recording grants survive rebuilds. Falls back to ad-hoc (grants reset each build).
-# SIGN_ID="Other Cert" ./build.sh   -> use a different identity.
+# SIGN_ID="Other Cert" ./build.sh   -> use a different identity. VERSION=1.2.3 ./build.sh   -> stamp a version.
 set -euo pipefail
 cd "$(dirname "$0")"
 swift build -c release
@@ -11,6 +11,10 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/PadKey "$APP/Contents/MacOS/PadKey"
 cp Info.plist "$APP/Contents/Info.plist"
+# Release workflow: VERSION=1.2.3 ./build.sh stamps the version into the bundle.
+if [ -n "${VERSION:-}" ]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion ${BUILD_NUMBER:-$VERSION}" "$APP/Contents/Info.plist"
+fi
 
 SIGN_ID="${SIGN_ID:-PadKey Self-Signed}"
 KC="$HOME/.padkey-signing/padkey.keychain-db"
