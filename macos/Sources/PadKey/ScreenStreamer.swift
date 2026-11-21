@@ -39,16 +39,20 @@ enum Displays {
         return ids().enumerated().map { i, d in ["id": i, "name": names[d] ?? "Display \(i + 1)"] }
     }
 
-    /// Encoded video size for a display: 1280 wide (or native if smaller), even height.
-    static func videoSize(for r: CGRect) -> (Int, Int) {
-        let w = min(1280, max(2, Int(r.width)))
+    /// Encoded video size for a display: Standard 1280 wide, Sharp up to 2560 wide (never above the native pixel
+    /// width), display aspect, even dimensions.
+    static func videoSize(for id: CGDirectDisplayID, quality: Int) -> (Int, Int) {
+        let r = CGDisplayBounds(id)
+        let native = CGDisplayCopyDisplayMode(id)?.pixelWidth ?? Int(r.width)
+        let w = min(quality >= 1 ? 2560 : 1280, max(2, native))
         let h = max(2, Int((Double(w) * Double(r.height) / Double(max(r.width, 1)) / 2).rounded()) * 2)
         return (w & ~1, h)
     }
 }
 
 /// ScreenCaptureKit -> VideoToolbox H.264 -> TCP viewers on port 50506.
-/// Wire format: after a one-line JSON hello from the viewer, frames of 4-byte big-endian length + Annex-B access unit.
+/// Wire format (v2): a plaintext one-line JSON hello exchange, then AES-256-GCM frames (see PROTOCOL.md) whose
+/// plaintext is one Annex-B access unit.
 final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
     static let port: UInt16 = 50506
     static let shared = ScreenStreamer()
@@ -58,12 +62,24 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
     private(set) var running = false
     private(set) var failed = false
     private(set) var listenerError: String?
+    private var everFrame = false
+    private var lastErrorCode = 0
+
+    /// nil = capture is fine. Otherwise "no_permission", "needs_relaunch" (permission granted but capture does not
+    /// work until PadKey is relaunched) or "failed".
+    var reason: String? {
+        if !CGPreflightScreenCaptureAccess() { return "no_permission" }
+        if failed { return (!everFrame || lastErrorCode == -3801) ? "needs_relaunch" : "failed" }
+        return nil
+    }
 
     private let q = DispatchQueue(label: "padkey.screen")
     private var listener: NWListener?
     private var viewers: [ObjectIdentifier: Viewer] = [:]
     private var requested = false
     private var wantIndex = 0
+    private var wantQuality = 0
+    private var curQuality = -1
 
     private var gen = 0
     private var stream: SCStream?
@@ -109,11 +125,17 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         }
         nw.start(queue: q)
-        // First line must be {"t":"hello","token":"..."}; give the phone 5 s.
+        // Hello + first valid encrypted frame must arrive within 5 s; unpaired clients get nothing.
         q.asyncAfter(deadline: .now() + 5) { [weak self, weak v] in
             if let v = v, !v.authed { self?.drop(v) }
         }
         readHello(v)
+    }
+
+    private func refuse(_ v: Viewer, _ msg: String) {
+        var d = (try? JSONSerialization.data(withJSONObject: ["t": "error", "msg": msg])) ?? Data()
+        d.append(10)
+        v.nw.send(content: d, completion: .contentProcessed { [weak self] _ in self?.drop(v) })
     }
 
     private func readHello(_ v: Viewer) {
@@ -122,17 +144,23 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
             if let d = data { v.buf.append(d) }
             if let nl = v.buf.firstIndex(of: 10) {
                 let line = v.buf.subdata(in: v.buf.startIndex..<nl)
+                v.buf.removeSubrange(v.buf.startIndex...nl)
                 let o = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any]
-                let want = Server.token
-                if want.isEmpty || (o?["token"] as? String) == want {
-                    v.authed = true
-                    v.needKey = true
-                    self.requestKeyframe()
-                    self.reconcile()
-                    self.drain(v)   // ignore anything else
-                } else {
-                    self.drop(v)
+                guard let id = o?["id"] as? String, let nc = PK.unb64(o?["n"]), nc.count >= 16, nc.count <= 64,
+                      ((o?["v"] as? NSNumber)?.intValue ?? 1) >= PK.version else {
+                    return self.refuse(v, "bad hello")
                 }
+                guard let secret = DispatchQueue.main.sync(execute: { PairStore.shared.secret(for: id) }) else {
+                    return self.refuse(v, "not paired")
+                }
+                let ns = PK.random(16)
+                let reply: [String: Any] = ["t": "hello", "ok": true, "v": PK.version, "n": PK.b64(ns),
+                                            "auth": PK.b64(PK.macAuth(secret: secret, label: "video", nc: nc, ns: ns))]
+                var d = (try? JSONSerialization.data(withJSONObject: reply)) ?? Data()
+                d.append(10)
+                v.channel = SecureChannel(secret: secret, nc: nc, ns: ns, label: "video")
+                v.nw.send(content: d, completion: .contentProcessed { _ in })
+                self.readFrames(v)
                 return
             }
             if complete || error != nil || v.buf.count > 4096 { self.drop(v); return }
@@ -140,12 +168,33 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
-    private func drain(_ v: Viewer) {
-        v.nw.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self, weak v] _, _, complete, error in
-            guard let self = self, let v = v else { return }
-            if complete || error != nil { self.drop(v); return }
-            self.drain(v)
+    /// The phone's only job on the video port is to send one valid encrypted frame (proof of the long-term secret).
+    private func readFrames(_ v: Viewer) {
+        while v.buf.count >= 4 {
+            let hdr = Data(v.buf.prefix(4))
+            let n = Int(hdr.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).bigEndian })
+            if n < 16 || n > 65536 { drop(v); return }
+            if v.buf.count < 4 + n { break }
+            let body = Data(v.buf.subdata(in: v.buf.startIndex + 4..<v.buf.startIndex + 4 + n))
+            v.buf.removeSubrange(v.buf.startIndex..<v.buf.startIndex + 4 + n)
+            guard v.channel?.open(body, hdr: hdr) != nil else { drop(v); return }
+            if !v.authed {
+                v.authed = true
+                v.needKey = true
+                requestKeyframe()
+                reconcile()
+            }
         }
+        v.nw.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self, weak v] data, _, complete, error in
+            guard let self = self, let v = v else { return }
+            if let d = data { v.buf.append(d) }
+            if complete || error != nil { self.drop(v); return }
+            self.readFrames(v)
+        }
+    }
+
+    func dropAllViewers() {
+        q.async { for v in Array(self.viewers.values) { self.drop(v) } }
     }
 
     private func drop(_ v: Viewer) {
@@ -156,10 +205,11 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
     // MARK: control (called from Server on main)
 
     /// `on` = at least one phone asked for the mirror; `index` = display index.
-    func setRequest(on: Bool, index: Int) {
+    func setRequest(on: Bool, index: Int, quality: Int) {
         q.async {
             self.requested = on
             self.wantIndex = index
+            self.wantQuality = quality
             self.reconcile()
         }
     }
@@ -169,7 +219,7 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
     private func reconcile() {
         let wantRun = requested && !viewers.values.filter { $0.authed }.isEmpty
         if wantRun {
-            if stream == nil && !starting || (curIndex != wantIndex && !starting) { start() }
+            if stream == nil && !starting || ((curIndex != wantIndex || curQuality != wantQuality) && !starting) { start() }
         } else if stream != nil || starting {
             stop()
         }
@@ -182,6 +232,7 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
         gen += 1
         let g = gen
         let index = wantIndex
+        let quality = wantQuality
         starting = true
         failed = false
         for v in viewers.values { v.needKey = true }
@@ -192,7 +243,7 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
                 guard let disp = content.displays.first(where: { $0.displayID == did }) ?? content.displays.first else {
                     throw NSError(domain: "padkey", code: 1, userInfo: [NSLocalizedDescriptionKey: "no display"])
                 }
-                let (w, h) = Displays.videoSize(for: Displays.bounds(at: index))
+                let (w, h) = Displays.videoSize(for: did, quality: quality)
                 let cfg = SCStreamConfiguration()
                 cfg.width = w
                 cfg.height = h
@@ -203,7 +254,7 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
                 let filter = SCContentFilter(display: disp, excludingWindows: [])
                 let st = SCStream(filter: filter, configuration: cfg, delegate: self)
                 try st.addStreamOutput(self, type: .screen, sampleHandlerQueue: DispatchQueue(label: "padkey.screen.out"))
-                let sess = try self.makeSession(w, h)
+                let sess = try self.makeSession(w, h, quality: quality)
                 try await st.startCapture()
                 self.q.async {
                     if g != self.gen { // superseded or stopped while starting
@@ -214,14 +265,20 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
                     self.stream = st
                     self.session = sess
                     self.curIndex = index
+                    self.curQuality = quality
                     self.starting = false
                     self.running = true
                     self.needKeyframe = true
                     self.notify()
+                    // No frame within 3 s of the very first start: capture is silently denied (TCC grant needs a relaunch).
+                    self.q.asyncAfter(deadline: .now() + 3) {
+                        if g == self.gen && !self.everFrame && !self.failed { self.failed = true; self.notify() }
+                    }
                 }
             } catch {
                 NSLog("PadKey screen start failed: \(error)")
                 self.q.async {
+                    self.lastErrorCode = (error as NSError).code
                     if g == self.gen { self.starting = false; self.failed = true; self.running = false }
                     self.notify()
                 }
@@ -238,6 +295,7 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
         session = nil
         lastPB = nil
         curIndex = -1
+        curQuality = -1
         let was = running
         running = false
         if was { notify() }
@@ -261,7 +319,7 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
 
     // MARK: encode
 
-    private func makeSession(_ w: Int, _ h: Int) throws -> VTCompressionSession {
+    private func makeSession(_ w: Int, _ h: Int, quality: Int) throws -> VTCompressionSession {
         var s: VTCompressionSession?
         let spec: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
         let st = VTCompressionSessionCreate(allocator: nil, width: Int32(w), height: Int32(h),
@@ -276,8 +334,9 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
         set(kVTCompressionPropertyKey_RealTime, kCFBooleanTrue)
         set(kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_Main_AutoLevel)
         set(kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
-        set(kVTCompressionPropertyKey_AverageBitRate, 4_000_000 as CFNumber)
-        set(kVTCompressionPropertyKey_DataRateLimits, [500_000 * 2, 1] as CFArray)  // bytes per second cap (~8 Mbps peak)
+        // Standard ~4 Mbps (peak cap ~8 Mbps), Sharp ~10 Mbps (peak cap ~20 Mbps).
+        set(kVTCompressionPropertyKey_AverageBitRate, (quality >= 1 ? 10_000_000 : 4_000_000) as CFNumber)
+        set(kVTCompressionPropertyKey_DataRateLimits, [quality >= 1 ? 2_500_000 : 1_000_000, 1] as CFArray)  // bytes per second
         set(kVTCompressionPropertyKey_ExpectedFrameRate, 30 as CFNumber)
         set(kVTCompressionPropertyKey_MaxKeyFrameInterval, 60 as CFNumber)
         set(kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, 2 as CFNumber)
@@ -298,6 +357,10 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
               let pb = CMSampleBufferGetImageBuffer(sb) else { return }
         q.async {
             guard stream === self.stream || self.starting else { return }
+            if !self.everFrame || self.failed {
+                self.everFrame = true
+                if self.failed { self.failed = false; self.notify() }
+            }
             self.lastPB = pb
             self.encode(pb)
         }
@@ -322,10 +385,6 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private func emit(_ sample: CMSampleBuffer) {
         guard let au = ScreenStreamer.annexB(sample) else { return }
-        var frame = Data(capacity: au.data.count + 4)
-        var len = UInt32(au.data.count).bigEndian
-        withUnsafeBytes(of: &len) { frame.append(contentsOf: $0) }
-        frame.append(au.data)
         for v in viewers.values where v.authed {
             if v.needKey {
                 if !au.key { continue }
@@ -336,6 +395,7 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
                 needKeyframe = true
                 continue
             }
+            guard let frame = v.channel?.seal(au.data) else { continue }   // seal only what is actually sent (counter stays in step)
             v.inflight += 1
             v.nw.send(content: frame, completion: .contentProcessed { [weak self, weak v] _ in
                 self?.q.async { v?.inflight -= 1 }
@@ -387,6 +447,7 @@ final class ScreenStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
 private final class Viewer {
     let nw: NWConnection
     var buf = Data()
+    var channel: SecureChannel?
     var authed = false
     var needKey = true
     var inflight = 0

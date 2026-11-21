@@ -1,40 +1,44 @@
 #!/usr/bin/env python3
-"""Screen-mirror smoke test: python3 tools/test_stream.py [host] [token] [out.h264]
-Sends `screen on`, reads the H.264 stream on 50506 for ~4 s, prints stats, optionally writes the raw Annex-B file
-(play with: ffplay out.h264)."""
-import json, socket, struct, sys, time
+"""Screen-mirror smoke test (protocol v2): python3 tools/test_stream.py [host] [out.h264] [--quality 1]
+Needs a prior pairing (tools/test_client.py --pair PIN). Sends `screen on`, reads the encrypted H.264 stream on 50506
+for ~4 s, decrypts it, prints stats and optionally writes raw Annex-B (play with: ffplay out.h264)."""
+import json, os, socket, struct, sys, time
 
-host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
-token = sys.argv[2] if len(sys.argv) > 2 else ""
-out = open(sys.argv[3], "wb") if len(sys.argv) > 3 else None
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from padkey_proto import Phone
 
-c = socket.create_connection((host, 50505), timeout=3)
-cf = c.makefile("rwb", buffering=0)
-send = lambda **m: cf.write((json.dumps(m) + "\n").encode())
-send(t="hello", token=token, v=1); print("hello ->", cf.readline().decode().strip())
-send(t="screen", on=True, display=0)
-print("screeninfo ->", cf.readline().decode().strip())
+args = [a for a in sys.argv[1:] if not a.startswith("--") and not (sys.argv[sys.argv.index(a) - 1] == "--quality")]
+host = args[0] if args else "127.0.0.1"
+out = open(args[1], "wb") if len(args) > 1 else None
+quality = int(sys.argv[sys.argv.index("--quality") + 1]) if "--quality" in sys.argv else 0
+phone = Phone(os.environ.get("PADKEY_TEST_STATE", os.path.expanduser("~/.config/padkey-test/phone.json")))
 
-v = socket.create_connection((host, 50506), timeout=5)
-v.sendall((json.dumps({"t": "hello", "token": token}) + "\n").encode())
-buf = b""; frames = keys = nbytes = 0; t0 = time.time(); first = None
-v.settimeout(1)
+c, cf, cch, r = phone.hello(host, 50505)
+send = lambda **m: c.sendall(cch.seal(json.dumps(m).encode()))
+print("hello ->", r.get("name"))
+send(t="ping", id=1)
+send(t="screen", on=True, display=0, q=quality)
+while True:
+    m = json.loads(cch.read_frame(cf))
+    if m["t"] == "screeninfo":
+        print("screeninfo ->", {k: m[k] for k in ("w", "h", "ok", "perm", "reason") if k in m})
+        break
+
+v, vf, vch, _ = phone.hello(host, 50506, label="video", mid=r["mid"])
+v.sendall(vch.seal(b'{"t":"ready"}'))
+frames = keys = nbytes = 0; t0 = time.time(); first = None; size = None
+v.settimeout(6)  # max wait for the next frame (an idle screen sends nothing between keyframes)
 while time.time() - t0 < 4:
     try:
-        d = v.recv(65536)
-    except socket.timeout:
-        continue
-    if not d: break
-    buf += d
-    while len(buf) >= 4:
-        n = struct.unpack(">I", buf[:4])[0]
-        if len(buf) < 4 + n: break
-        au = buf[4:4 + n]; buf = buf[4 + n:]
-        if au[:4] != b"\x00\x00\x00\x01": print("BAD start code"); sys.exit(1)
-        if first is None: first = time.time() - t0
-        frames += 1; nbytes += n
-        if (au[4] & 0x1f) in (7, 5): keys += 1
-        if out: out.write(au)
-print(f"frames={frames} keyframes={keys} bytes={nbytes} first_frame_after={first} s")
+        au = vch.read_frame(vf)
+    except (OSError, ConnectionError):  # timeout or closed
+        break
+    if au[:4] != b"\x00\x00\x00\x01":
+        print("BAD start code"); sys.exit(1)
+    if first is None: first = time.time() - t0
+    frames += 1; nbytes += len(au)
+    if (au[4] & 0x1f) in (7, 5): keys += 1
+    if out: out.write(au)
+print(f"frames={frames} keyframes={keys} bytes={nbytes} first_frame_after={first} s (quality {quality})")
 send(t="screen", on=False)
 sys.exit(0 if frames else 2)

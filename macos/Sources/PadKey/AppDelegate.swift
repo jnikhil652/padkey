@@ -1,10 +1,12 @@
 import AppKit
 import ApplicationServices
+import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var item: NSStatusItem!
     private let server = Server()
     private var pollTimer: Timer?
+    private var pairWindow: PairWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -15,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         server.start()
         // Ask for Accessibility once at launch (shows the system dialog).
         _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+        if ProcessInfo.processInfo.environment["PADKEY_TEST_PIN"] != nil { _ = Pairing.shared.open() }   // headless test pairing
         refreshIcon()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refreshIcon() }
     }
@@ -52,12 +55,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             add(menu, "(System Settings > Privacy & Security > Accessibility > enable PadKey)")
         }
         if CGPreflightScreenCaptureAccess() {
-            add(menu, "Screen Recording: granted" + (ScreenStreamer.shared.running ? " (mirroring)" : ""))
+            switch ScreenStreamer.shared.reason {
+            case "needs_relaunch":
+                add(menu, "Relaunch PadKey to enable Screen Recording", action: #selector(relaunch))
+            case "failed":
+                add(menu, "Screen Recording: granted, but capture failed")
+            default:
+                add(menu, "Screen Recording: granted" + (ScreenStreamer.shared.running ? " (mirroring)" : ""))
+            }
         } else {
             add(menu, "Screen Recording NOT granted - click to fix", action: #selector(openScreenRecording))
             add(menu, "(System Settings > Privacy & Security > Screen Recording > enable PadKey)")
         }
-        add(menu, Server.token.isEmpty ? "Token: none (open to LAN)" : "Token: required (~/.config/padkey/token)")
+        menu.addItem(.separator())
+        add(menu, "Pair new phone…", action: #selector(pairNew))
+        let phones = PairStore.shared.phones
+        if phones.isEmpty {
+            add(menu, "No phones paired")
+        } else {
+            add(menu, "Paired phones:")
+            for p in phones { add(menu, "   \(p.name)") }
+            add(menu, "Forget all phones", action: #selector(forgetAll))
+        }
+        let login = add(menu, "Launch at login", action: #selector(toggleLogin))
+        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(.separator())
         let q = NSMenuItem(title: "Quit PadKey", action: #selector(quit), keyEquivalent: "q")
         q.target = self
@@ -91,6 +112,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    @objc private func pairNew() {
+        _ = Pairing.shared.open()
+        if pairWindow == nil { pairWindow = PairWindow() }
+        pairWindow?.show()
+    }
+
+    @objc private func forgetAll() {
+        let a = NSAlert()
+        a.messageText = "Forget all paired phones?"
+        a.informativeText = "Every phone will have to be paired again with a new PIN."
+        a.addButton(withTitle: "Forget all")
+        a.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        if a.runModal() == .alertFirstButtonReturn {
+            PairStore.shared.forgetAll()
+            server.disconnectAll()
+        }
+    }
+
+    @objc private func toggleLogin() {
+        do {
+            if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() }
+            else { try SMAppService.mainApp.register() }
+        } catch {
+            let a = NSAlert()
+            a.messageText = "Could not change Launch at login"
+            a.informativeText = "\(error.localizedDescription)\nTry it from ~/Applications/PadKey.app (./build.sh --install), or add it in System Settings > General > Login Items."
+            NSApp.activate(ignoringOtherApps: true)
+            a.runModal()
+        }
+    }
+
+    @objc private func relaunch() {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", "sleep 1; /usr/bin/open -n \"$0\"", Bundle.main.bundlePath]
+        try? p.run()
+        server.injector.releaseAll()
+        NSApp.terminate(nil)
+    }
+
     @objc private func quit() {
         server.injector.releaseAll()
         NSApp.terminate(nil)
@@ -113,5 +175,74 @@ enum Net {
             out.append(String(cString: host))
         }
         return out
+    }
+}
+
+/// Small floating window showing the pairing PIN with a countdown. Closes itself when pairing finishes or expires.
+final class PairWindow {
+    private let panel: NSPanel
+    private let pinLabel = NSTextField(labelWithString: "")
+    private let info = NSTextField(labelWithString: "")
+    private var timer: Timer?
+
+    init() {
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 200),
+                        styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        panel.title = "Pair new phone"
+        panel.level = .floating
+        panel.isReleasedWhenClosed = false
+        let head = NSTextField(labelWithString: "Open PadKey on the phone and enter this PIN:")
+        pinLabel.font = NSFont.monospacedSystemFont(ofSize: 48, weight: .semibold)
+        pinLabel.alignment = .center
+        info.textColor = .secondaryLabelColor
+        info.alignment = .center
+        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
+        let stack = NSStackView(views: [head, pinLabel, info, cancel])
+        stack.orientation = .vertical
+        stack.spacing = 12
+        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        panel.contentView = stack
+        Pairing.shared.onChange = { [weak self] why in self?.changed(why) }
+    }
+
+    func show() {
+        refresh()
+        panel.center()
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
+    }
+
+    private func refresh() {
+        guard let pin = Pairing.shared.pin else { return }
+        let left = Int(Pairing.shared.expires.timeIntervalSinceNow.rounded(.up))
+        if left <= 0 { Pairing.shared.close("expired"); return }
+        pinLabel.stringValue = String(pin.prefix(3)) + " " + String(pin.suffix(3))
+        info.stringValue = "Valid for \(left / 60):" + String(format: "%02d", left % 60)
+    }
+
+    private func changed(_ why: String) {
+        if why.hasPrefix("paired:") {
+            pinLabel.stringValue = "Paired"
+            info.stringValue = String(why.dropFirst(7))
+            timer?.invalidate()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.panel.orderOut(nil) }
+        } else if why == "wrong PIN" {
+            info.stringValue = "Wrong PIN entered on a phone. Try again."
+        } else if why == "open" {
+            refresh()
+        } else {
+            timer?.invalidate()
+            pinLabel.stringValue = "-"
+            info.stringValue = why == "closed" ? "Pairing cancelled." : "Pairing closed (\(why))."
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.panel.orderOut(nil) }
+        }
+    }
+
+    @objc private func cancel() {
+        timer?.invalidate()
+        Pairing.shared.close()
+        panel.orderOut(nil)
     }
 }

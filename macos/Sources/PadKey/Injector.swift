@@ -1,5 +1,7 @@
 import Cocoa
 import CoreGraphics
+import IOKit
+import IOKit.hidsystem
 
 /// Turns protocol messages into CGEvents. All calls happen on the main queue.
 final class Injector {
@@ -19,6 +21,12 @@ final class Injector {
     private var heldFlags: CGEventFlags = []
     private var repeatTimer: DispatchSourceTimer?
     private var repeatCode: Int?
+
+    // Caps Lock (keycode 57): toggled by a tap, kept as state and applied to every following event.
+    private(set) var capsOn = CGEventSource.flagsState(.hidSystemState).contains(.maskAlphaShift)
+    var onCaps: ((Bool) -> Void)?
+    /// Flags applied to every event: held modifiers + Caps Lock.
+    private var baseFlags: CGEventFlags { capsOn ? heldFlags.union(.maskAlphaShift) : heldFlags }
 
     // Cached display rects
     private var rects: [CGRect] = []
@@ -105,7 +113,7 @@ final class Injector {
         guard let e = CGEvent(mouseEventSource: src, mouseType: type, mouseCursorPosition: np, mouseButton: btn) else { return }
         e.setIntegerValueField(.mouseEventDeltaX, value: Int64(dx.rounded()))
         e.setIntegerValueField(.mouseEventDeltaY, value: Int64(dy.rounded()))
-        e.flags = heldFlags.union(Injector.cgFlags(flags))
+        e.flags = baseFlags.union(Injector.cgFlags(flags))
         e.post(tap: .cghidEventTap)
         pos = np
     }
@@ -125,7 +133,7 @@ final class Injector {
         if let e = CGEvent(mouseEventSource: src, mouseType: type, mouseCursorPosition: np, mouseButton: btn) {
             e.setIntegerValueField(.mouseEventDeltaX, value: Int64(dx.rounded()))
             e.setIntegerValueField(.mouseEventDeltaY, value: Int64(dy.rounded()))
-            e.flags = heldFlags.union(Injector.cgFlags(flags))
+            e.flags = baseFlags.union(Injector.cgFlags(flags))
             e.post(tap: .cghidEventTap)
         }
         pos = np
@@ -147,7 +155,7 @@ final class Injector {
         let p = CGPoint(x: pos.x.rounded(.down), y: pos.y.rounded(.down))
         guard let e = CGEvent(mouseEventSource: src, mouseType: type, mouseCursorPosition: p, mouseButton: btn) else { return }
         e.setIntegerValueField(.mouseEventClickState, value: Int64(max(1, clickState)))
-        e.flags = heldFlags.union(Injector.cgFlags(flags))
+        e.flags = baseFlags.union(Injector.cgFlags(flags))
         e.post(tap: .cghidEventTap)
     }
 
@@ -168,7 +176,7 @@ final class Injector {
         if ix == 0 && iy == 0 { return }
         guard let e = CGEvent(scrollWheelEvent2Source: src, units: .pixel, wheelCount: 2, wheel1: iy, wheel2: ix, wheel3: 0) else { return }
         e.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-        e.flags = heldFlags.union(Injector.cgFlags(flags))
+        e.flags = baseFlags.union(Injector.cgFlags(flags))
         e.post(tap: .cghidEventTap)
     }
 
@@ -187,22 +195,42 @@ final class Injector {
     func key(code: Int, down: Bool, flags: Int = 0) {
         if let mf = Injector.modifierFlag(forKey: code) {
             if down { heldFlags.insert(mf) } else { heldFlags.remove(mf) }
-            postKey(code, down: down, flags: heldFlags)
+            postKey(code, down: down, flags: baseFlags)
             if down { heldKeys[code] = heldFlags } else { heldKeys[code] = nil }
+            return
+        }
+        if code == 57 {   // Caps Lock: a tap toggles it
+            if down { toggleCaps() }
             return
         }
         if down {
             stopRepeat()
-            let f = heldFlags.union(Injector.cgFlags(flags))
+            let f = baseFlags.union(Injector.cgFlags(flags))
             heldKeys[code] = f
             postKey(code, down: true, flags: f)
             startRepeat(code, f)
         } else {
             if repeatCode == code { stopRepeat() }
-            let f = heldKeys[code] ?? heldFlags.union(Injector.cgFlags(flags))
+            let f = heldKeys[code] ?? baseFlags.union(Injector.cgFlags(flags))
             heldKeys[code] = nil
             postKey(code, down: false, flags: f)
         }
+    }
+
+    private func toggleCaps() {
+        capsOn.toggle()
+        // Also flip the real system Caps Lock state (LED, other apps); the flags below cover apps that read events.
+        let h = NXOpenEventStatus()
+        if h != 0 {
+            _ = IOHIDSetModifierLockState(h, Int32(kIOHIDCapsLockState), capsOn)
+            NXCloseEventStatus(h)
+        }
+        if let e = CGEvent(keyboardEventSource: src, virtualKey: 57, keyDown: true) {
+            e.type = .flagsChanged
+            e.flags = baseFlags
+            e.post(tap: .cghidEventTap)
+        }
+        onCaps?(capsOn)
     }
 
     func tap(_ code: Int, flags: Int = 0) {
@@ -235,7 +263,7 @@ final class Injector {
         }
         for (code, _) in heldKeys where Injector.modifierFlag(forKey: code) != nil {
             if let mf = Injector.modifierFlag(forKey: code) { heldFlags.remove(mf) }
-            postKey(code, down: false, flags: heldFlags)
+            postKey(code, down: false, flags: baseFlags)
         }
         heldKeys.removeAll()
         heldFlags = []
@@ -246,21 +274,29 @@ final class Injector {
 
     // MARK: text
 
-    func text(_ s: String) {
+    private enum TypeOp {
+        case chunk([UniChar])
+        case key(Int)
+        case paste(String)
+        case pause(TimeInterval)
+    }
+    private final class TypeJob {
+        var ops: [TypeOp]
+        let done: (() -> Void)?
+        init(_ ops: [TypeOp], _ done: (() -> Void)?) { self.ops = ops; self.done = done }
+    }
+    private var typeJobs: [TypeJob] = []
+    private var typeBusy = false
+
+    /// Types a unicode string as CGEvent keystrokes (<=16 UTF-16 units per event, ~8 ms between events so apps keep up).
+    /// Jobs run in order; `done` fires when this one has been fully posted.
+    func text(_ s: String, enter: Bool = false, done: (() -> Void)? = nil) {
+        var ops: [TypeOp] = []
         var buf: [UniChar] = []
-        func flush() {
-            if buf.isEmpty { return }
-            for down in [true, false] {
-                guard let e = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: down) else { continue }
-                e.flags = []
-                e.keyboardSetUnicodeString(stringLength: buf.count, unicodeString: buf)
-                e.post(tap: .cghidEventTap)
-            }
-            buf.removeAll(keepingCapacity: true)
-        }
+        func flush() { if !buf.isEmpty { ops.append(.chunk(buf)); buf.removeAll() } }
         for ch in s {
-            if ch.isNewline { flush(); tap(36) }
-            else if ch == "\t" { flush(); tap(48) }
+            if ch.isNewline { flush(); ops.append(.key(36)) }
+            else if ch == "\t" { flush(); ops.append(.key(48)) }
             else {
                 let u = Array(String(ch).utf16)
                 if buf.count + u.count > 16 { flush() }
@@ -268,6 +304,90 @@ final class Injector {
             }
         }
         flush()
+        if enter { ops.append(.key(36)) }
+        enqueue(ops, done)
+    }
+
+    /// Pastes `s` through the clipboard: saves every pasteboard item, sets the text, posts Cmd+V, restores the
+    /// previous contents ~400 ms later (unless something else changed the clipboard meanwhile).
+    func paste(_ s: String, enter: Bool = false, done: (() -> Void)? = nil) {
+        var ops: [TypeOp] = [.paste(s), .pause(enter ? 0.14 : 0.05)]
+        if enter { ops.append(.key(36)) }
+        enqueue(ops, done)
+    }
+
+    private func enqueue(_ ops: [TypeOp], _ done: (() -> Void)?) {
+        typeJobs.append(TypeJob(ops, done))
+        if !typeBusy { typeBusy = true; stepType() }
+    }
+
+    private func stepType() {
+        guard let job = typeJobs.first else { typeBusy = false; return }
+        if job.ops.isEmpty {
+            typeJobs.removeFirst()
+            job.done?()
+            stepType()
+            return
+        }
+        var delay = 0.008
+        switch job.ops.removeFirst() {
+        case .chunk(let u): postUnicode(u)
+        case .key(let c): tap(c)
+        case .paste(let s): doPaste(s); delay = 0.0
+        case .pause(let d): delay = d
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.stepType() }
+    }
+
+    private func postUnicode(_ u: [UniChar]) {
+        for down in [true, false] {
+            guard let e = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: down) else { continue }
+            e.flags = capsOn ? .maskAlphaShift : []
+            var chars = u
+            e.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: &chars)
+            e.post(tap: .cghidEventTap)
+        }
+    }
+
+    private var savedBoard: [[(NSPasteboard.PasteboardType, Data)]]?
+    private var restoreWork: DispatchWorkItem?
+    private var ourChange = 0
+
+    private func doPaste(_ s: String) {
+        let pb = NSPasteboard.general
+        if savedBoard == nil {   // keep the first snapshot while a restore is still pending
+            savedBoard = (pb.pasteboardItems ?? []).map { item in
+                item.types.compactMap { t in item.data(forType: t).map { (t, $0) } }
+            }
+        }
+        restoreWork?.cancel()
+        let item = NSPasteboardItem()
+        item.setString(s, forType: .string)
+        // Clipboard managers skip transient items.
+        item.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+        pb.clearContents()
+        pb.writeObjects([item])
+        ourChange = pb.changeCount
+        if let v = CGEvent(keyboardEventSource: src, virtualKey: 9, keyDown: true),
+           let u = CGEvent(keyboardEventSource: src, virtualKey: 9, keyDown: false) {
+            for e in [v, u] { e.flags = .maskCommand; e.post(tap: .cghidEventTap) }
+        }
+        let w = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            let pb = NSPasteboard.general
+            if pb.changeCount == self.ourChange, let saved = self.savedBoard {
+                pb.clearContents()
+                let items: [NSPasteboardItem] = saved.map { entries in
+                    let it = NSPasteboardItem()
+                    for (t, d) in entries { it.setData(d, forType: t) }
+                    return it
+                }
+                if !items.isEmpty { pb.writeObjects(items) }
+            }
+            self.savedBoard = nil
+        }
+        restoreWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: w)
     }
 
     // MARK: media / system keys
