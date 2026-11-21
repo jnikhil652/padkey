@@ -80,9 +80,9 @@ object Mods {
     fun reset() { state.clear() }
 }
 
-private enum class Kind { Normal, Mod, Layer, Media, Spacer }
+internal enum class Kind { Normal, Mod, Layer, Media, Spacer }
 
-private data class KeyDef(
+internal data class KeyDef(
     val label: String,
     val code: Int = -1,
     val w: Float = 1f,
@@ -94,13 +94,13 @@ private data class KeyDef(
     val repeat: Boolean = false,
 )
 
-private fun ch(label: String, code: Int, flags: Int = 0) = KeyDef(label, code, flags = flags)
+internal fun ch(label: String, code: Int, flags: Int = 0) = KeyDef(label, code, flags = flags)
 private fun spacer(w: Float) = KeyDef("", w = w, kind = Kind.Spacer)
 private fun letters(s: String, codes: IntArray) = s.mapIndexed { i, c -> KeyDef(c.toString(), codes[i], letter = true) }
 
 private val numCodes = intArrayOf(18, 19, 20, 21, 23, 22, 26, 28, 25, 29)
 
-private val layer0: List<List<KeyDef>> = listOf(
+internal val layer0: List<List<KeyDef>> = listOf(
     "1234567890".mapIndexed { i, c -> ch(c.toString(), numCodes[i]) },
     letters("qwertyuiop", intArrayOf(12, 13, 14, 15, 17, 16, 32, 34, 31, 35)),
     listOf(KeyDef("⇪", 57, 1f)) + letters("asdfghjkl", intArrayOf(0, 1, 2, 3, 5, 4, 38, 40, 37)),
@@ -109,7 +109,7 @@ private val layer0: List<List<KeyDef>> = listOf(
         KeyDef("⌫", VK.DELETE, 1.5f),
 )
 
-private val layer1: List<List<KeyDef>> = listOf(
+internal val layer1: List<List<KeyDef>> = listOf(
     listOf(ch("!", 18, 1), ch("@", 19, 1), ch("#", 20, 1), ch("$", 21, 1), ch("%", 23, 1),
         ch("^", 22, 1), ch("&", 26, 1), ch("*", 28, 1), ch("(", 25, 1), ch(")", 29, 1)),
     listOf(ch("-", 27), ch("_", 27, 1), ch("=", 24), ch("+", 24, 1), ch("[", 33), ch("]", 30),
@@ -121,7 +121,7 @@ private val layer1: List<List<KeyDef>> = listOf(
 
 private fun media(label: String, k: String, rep: Boolean = false) = KeyDef(label, kind = Kind.Media, media = k, repeat = rep)
 
-private val layer2: List<List<KeyDef>> = listOf(
+internal val layer2: List<List<KeyDef>> = listOf(
     (0..5).map { ch("F${it + 1}", VK.F[it]) },
     (6..11).map { ch("F${it + 1}", VK.F[it]) },
     listOf(media("Prev", "prev"), media("Play", "play"), media("Next", "next"),
@@ -131,16 +131,16 @@ private val layer2: List<List<KeyDef>> = listOf(
         KeyDef("PgUp", VK.PGUP), KeyDef("PgDn", VK.PGDN), KeyDef("⌫", VK.DELETE)),
 )
 
-private val modRow: List<KeyDef> = listOf(
+internal val modRow: List<KeyDef> = listOf(
     KeyDef("esc", VK.ESC), KeyDef("tab", VK.TAB),
     KeyDef("fn", VK.FN, kind = Kind.Mod), KeyDef("⌃", VK.CTRL, kind = Kind.Mod),
     KeyDef("⌥", VK.OPT, kind = Kind.Mod), KeyDef("⌘", VK.CMD, kind = Kind.Mod),
     KeyDef("◀", VK.LEFT), KeyDef("▼", VK.DOWN), KeyDef("▲", VK.UP), KeyDef("▶", VK.RIGHT),
 )
 
-private class Shortcut(val label: String, val mods: IntArray, val code: Int)
+internal class Shortcut(val label: String, val mods: IntArray, val code: Int)
 
-private val shortcuts = listOf(
+internal val shortcuts = listOf(
     Shortcut("Copy", intArrayOf(VK.CMD), 8), Shortcut("Paste", intArrayOf(VK.CMD), 9),
     Shortcut("Cut", intArrayOf(VK.CMD), 7), Shortcut("Undo", intArrayOf(VK.CMD), 6),
     Shortcut("Redo", intArrayOf(VK.CMD, VK.SHIFT), 6), Shortcut("All", intArrayOf(VK.CMD), 0),

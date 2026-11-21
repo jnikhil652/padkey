@@ -72,14 +72,14 @@ class MainActivity : ComponentActivity() {
         Prefs.init(this)
         intent?.getStringExtra("dictionary")?.let { Prefs.dictionary = it; Prefs.save() }
         intent?.getStringExtra("gemini_key")?.let { if (it.isNotBlank()) { Prefs.geminiKey = it.trim(); Prefs.save() } }
-        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+        if (!isTv(this) && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1)
         PadClient.start(applicationContext)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(
                 primary = Color(0xFFFF7A1A), onPrimary = Color.Black,
                 background = Color(0xFF0C0D0F), surface = Color(0xFF1B1D21),
-            )) { App() }
+            )) { if (isTv(this)) TvApp() else App() }
         }
     }
 }
@@ -152,7 +152,7 @@ private fun SmallChip(label: String, onClick: () -> Unit) {
 
 /** Text that has not been acknowledged by the Mac yet (offline / send failed), and failed transcriptions. */
 @Composable
-private fun PendingBar() {
+internal fun PendingBar() {
     val items = Outbox.items
     val failed = Voice.failedAudio
     if (items.isEmpty() && failed == null) return
@@ -182,7 +182,7 @@ private fun PendingBar() {
 }
 
 @Composable
-private fun PinDialog() {
+internal fun PinDialog() {
     var pin by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = { PadClient.cancelPairing() },
@@ -274,7 +274,7 @@ private fun DisplayDialog(onClose: () -> Unit) {
 }
 
 @Composable
-private fun TypePanel(modifier: Modifier) {
+internal fun TypePanel(modifier: Modifier) {
     var text by remember { mutableStateOf("") }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { try { focus.requestFocus() } catch (_: Exception) { } }
@@ -303,7 +303,7 @@ private fun TypePanel(modifier: Modifier) {
 }
 
 @Composable
-private fun ConnectDialog(onClose: () -> Unit) {
+internal fun ConnectDialog(onClose: () -> Unit) {
     var host by remember { mutableStateOf(Prefs.host) }
     var port by remember { mutableStateOf(Prefs.port.toString()) }
     AlertDialog(
@@ -344,7 +344,7 @@ private fun ConnectDialog(onClose: () -> Unit) {
 }
 
 @Composable
-private fun SettingsDialog(onClose: () -> Unit) {
+internal fun SettingsDialog(onClose: () -> Unit) {
     AlertDialog(
         onDismissRequest = { Prefs.save(); onClose() },
         title = { Text("Settings") },

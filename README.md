@@ -12,6 +12,7 @@ Open-source remote for your Mac, from your Android phone, over Wi-Fi. No physica
 - **Type mode**: use your Android keyboard (swipe/voice typing) and send the text
 - **Paste or type**: dictation and Type mode insert through the Mac clipboard (fast, exact; your clipboard is restored) or as keystrokes (Settings > Insert text by)
 - **Screen mirror**: tap 🖥 for a live H.264 view of the Mac screen (Standard or Sharp quality). Tap = click, double-tap = double-click, long-press = right-click, drag = mouse drag, pinch = zoom, two-finger drag = pan
+- **Android TV**: the same APK installs on Android TV / Google TV and shows a D-pad UI (no touch needed): a **remote** (arrows / OK, Esc, Tab, Backspace, media, volume, mute, Wake, plus a **Mouse** mode where the arrows move the cursor and OK clicks) and the full **keyboard** (modifiers, F-keys, shortcuts), or **Type text** with the TV's own keyboard. No screen mirror or dictation on TV. Sideload with `adb connect <tv-ip>` then `adb install PadKey-vX-android.apk`
 - **Paired and encrypted**: a one-time 6-digit PIN pairs the phone; everything afterwards (input and video) is AES-256-GCM encrypted
 - Mac menu-bar app: pairing, paired phones, Launch at login, permission status, Screen Recording relaunch helper
 
