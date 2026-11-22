@@ -82,9 +82,10 @@ fun ScreenView(modifier: Modifier = Modifier) {
                 color = Color(0xFF9A9CA3), fontSize = 12.sp, modifier = Modifier.align(Alignment.Center).padding(16.dp),
             )
         }
-        Row(Modifier.align(Alignment.TopEnd).padding(4.dp)) {
-            MirrorChip(if (Prefs.follow) "◎ Follow" else "○ Follow", Prefs.follow) { Prefs.follow = !Prefs.follow; Prefs.save() }
-            if (zoom > 1.02f) {
+        // Only while zoomed in, and in the bottom corner so the Mac's top-right (menu bar items, window buttons) stays tappable.
+        if (zoom > 1.02f) {
+            Row(Modifier.align(Alignment.BottomEnd).padding(4.dp)) {
+                MirrorChip(if (Prefs.follow) "◎ Follow" else "○ Follow", Prefs.follow) { Prefs.follow = !Prefs.follow; Prefs.save() }
                 Box(Modifier.padding(start = 4.dp)) { MirrorChip("%.1fx  ✕ reset".format(zoom), true) { view?.resetZoom() } }
             }
         }
