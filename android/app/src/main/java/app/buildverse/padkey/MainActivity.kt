@@ -311,7 +311,28 @@ internal fun ConnectDialog(onClose: () -> Unit) {
         title = { Text("Connect to Mac") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(if (PadClient.found.isEmpty()) "Searching for Macs on this Wi-Fi..." else "Found on Wi-Fi (tap to connect):", fontSize = 13.sp)
+                if (Prefs.pairings.isNotEmpty()) {
+                    Text("Your Macs (tap to connect):", fontSize = 13.sp)
+                    Prefs.pairings.forEach { p ->
+                        val live = PadClient.found.firstOrNull { it.name == p.name }
+                        val here = PadClient.connected && PadClient.activeMid == p.mid
+                        Row(
+                            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).background(if (here) Color(0xFF123524) else Color(0xFF2B2D33))
+                                .clickable { PadClient.connectMac(p); onClose() }.padding(start = 12.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(p.name + if (here) "  ·  connected" else "", fontSize = 14.sp)
+                                Text(
+                                    when { live != null -> "on this Wi-Fi  ${live.ip}"; p.host.isNotBlank() -> p.host; else -> "no address yet" },
+                                    fontSize = 11.sp, color = Color(0xFF9A9CA3),
+                                )
+                            }
+                            TextButton(onClick = { Prefs.forget(p.mid) }) { Text("Forget", fontSize = 12.sp) }
+                        }
+                    }
+                }
+                Text(if (PadClient.found.isEmpty()) "Searching for Macs on this Wi-Fi..." else "Found on Wi-Fi (tap to connect):", fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
                 PadClient.found.forEach { m ->
                     Row(
                         Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).background(Color(0xFF2B2D33))
@@ -323,7 +344,7 @@ internal fun ConnectDialog(onClose: () -> Unit) {
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(port, { port = it.filter(Char::isDigit) }, singleLine = true, label = { Text("Port") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
-                Text("Paired Macs: " + (Prefs.pairings.joinToString { it.name }.ifEmpty { "none" }), fontSize = 12.sp, color = Color(0xFF9A9CA3))
+                Text("To save a Mac on another network (office, Tailscale), enter its address once and Connect: it is remembered under Your Macs.", fontSize = 12.sp, color = Color(0xFF9A9CA3))
                 OutlinedButton(onClick = { PadClient.beginPairing(host.trim().ifEmpty { Prefs.host }, port.toIntOrNull() ?: 50505); onClose() },
                     modifier = Modifier.fillMaxWidth()) { Text("Pair with PIN...") }
             }

@@ -9,7 +9,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** A Mac this phone is paired with: `secret` is the 32-byte long-term key (base64), never leaves the phone. */
-data class Paired(val mid: String, val name: String, val secret: String)
+data class Paired(val mid: String, val name: String, val secret: String, val host: String = "", val port: Int = 50505)
 
 /** Settings, backed by SharedPreferences. Fields are Compose state so the UI reacts. */
 object Prefs {
@@ -42,7 +42,7 @@ object Prefs {
         if (phoneId.isBlank()) { phoneId = PK.hex(PK.random(16)); sp.edit().putString("phoneId", phoneId).apply() }
         pairings = try {
             val a = JSONArray(sp.getString("pairings", "[]"))
-            (0 until a.length()).map { a.getJSONObject(it).let { o -> Paired(o.getString("mid"), o.optString("name"), o.getString("secret")) } }
+            (0 until a.length()).map { a.getJSONObject(it).let { o -> Paired(o.getString("mid"), o.optString("name"), o.getString("secret"), o.optString("host"), o.optInt("port", 50505)) } }
         } catch (_: Exception) { emptyList() }
         insertPaste = sp.getBoolean("insertPaste", true)
         quality = sp.getInt("quality", 0)
@@ -77,6 +77,15 @@ object Prefs {
         pairings = pairings.filter { it.mid != p.mid } + p
         savePairings()
     }
+
+    /** Remember where a paired Mac was last reached (IP, hostname or Tailscale name). */
+    fun rememberAddress(mid: String, host: String, port: Int) {
+        if (pairings.none { it.mid == mid && (it.host != host || it.port != port) }) return
+        pairings = pairings.map { if (it.mid == mid) it.copy(host = host, port = port) else it }
+        savePairings()
+    }
+
+    fun forget(mid: String) { pairings = pairings.filter { it.mid != mid }; savePairings() }
 
     fun forgetPairings() { pairings = emptyList(); savePairings() }
 

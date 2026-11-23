@@ -49,6 +49,7 @@ object PadClient {
     var cursorX by mutableStateOf(-1f)
     var cursorY by mutableStateOf(-1f)
     @Volatile var sessionHost = ""
+    @Volatile var activeMid = ""   // the Mac the user chose; auto-reconnect never hops to a different one
 
     @Volatile private var socket: Socket? = null
     @Volatile private var autoConnect = true
@@ -77,9 +78,11 @@ object PadClient {
                         var h = Prefs.host
                         val f = found.toList()
                         if (h.isBlank()) h = f.firstOrNull()?.ip ?: ""
-                        else if (failCount >= 2 && f.isNotEmpty() && f.none { it.ip == h }) {
-                            // Saved IP keeps failing and Bonjour sees a Mac elsewhere (DHCP change).
-                            h = f.first().ip; Prefs.host = h; Prefs.save(); failCount = 0
+                        else if (failCount >= 2 && f.none { it.ip == h }) {
+                            // Saved IP keeps failing: follow the SAME Mac (by name) if Bonjour sees it at a new address (DHCP change).
+                            val want = Prefs.pairings.firstOrNull { it.mid == activeMid }?.name
+                            val same = want?.let { n -> f.firstOrNull { it.name == n } }
+                            if (same != null) { h = same.ip; Prefs.host = h; Prefs.save(); failCount = 0 }
                         }
                         if (h.isNotBlank()) session(h, f.firstOrNull { it.ip == h }?.port ?: Prefs.port)
                         else message = "Searching for Mac..."
@@ -88,6 +91,15 @@ object PadClient {
                 Thread.sleep(1500)
             }
         }
+    }
+
+    /** Connect to one of the paired Macs: a fresh Bonjour address wins over the remembered one. */
+    fun connectMac(p: Paired) {
+        val live = found.firstOrNull { it.name == p.name }
+        val host = live?.ip ?: p.host
+        if (host.isBlank()) { message = "No address for ${p.name} yet: enter its IP or Tailscale name once"; return }
+        activeMid = p.mid
+        connect(host, live?.port ?: p.port)
     }
 
     fun connect(host: String, port: Int) {
@@ -135,7 +147,8 @@ object PadClient {
                 val ok = read()
                 if (!PK.eq(PK.unb64(ok.getString("m")), keys.macConfirm())) throw IllegalStateException("Mac did not prove the PIN")
                 val secret = PK.unwrap(keys.wrapKey, PK.unb64(ok.getString("iv")), PK.unb64(ok.getString("ct")), Prefs.phoneId.toByteArray())
-                Prefs.addPairing(Paired(ok.getString("mid"), ok.optString("name", "Mac"), PK.b64(secret)))
+                Prefs.addPairing(Paired(ok.getString("mid"), ok.optString("name", "Mac"), PK.b64(secret), host, port))
+                activeMid = ok.getString("mid")
                 Prefs.host = host; Prefs.port = port; Prefs.save()
                 needPin = false; autoConnect = true; failCount = 0; message = ""
             } catch (e: Exception) {
@@ -215,6 +228,8 @@ object PadClient {
             ch = Channel(secret, nc, ns, "ctl")
             sessionSecret = secret
             macName = reply.optString("name", "Mac")
+            activeMid = reply.optString("mid")
+            Prefs.rememberAddress(activeMid, host, port)
             s.soTimeout = 0
         } catch (_: Exception) {
             try { s.close() } catch (_: Exception) { }
