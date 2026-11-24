@@ -33,6 +33,7 @@ object Prefs {
     var screen by mutableStateOf(false)   // Mac screen mirror (3-way layout) on/off
     var display by mutableStateOf(0)      // which Mac display to mirror
     var follow by mutableStateOf(false)   // keep the Mac cursor centered while zoomed in
+    var mirrorTouch by mutableStateOf(true)  // screen mirror reacts to touch (off: view only, ignores every touch)
 
     fun init(ctx: Context) {
         sp = ctx.getSharedPreferences("padkey", Context.MODE_PRIVATE)
@@ -58,6 +59,7 @@ object Prefs {
         screen = sp.getBoolean("screen", false)
         display = sp.getInt("display", 0)
         follow = sp.getBoolean("follow", false)
+        mirrorTouch = sp.getBoolean("mirrorTouch", true)
     }
 
     fun save() {
@@ -70,6 +72,7 @@ object Prefs {
             .putBoolean("haptics", haptics).putBoolean("returnAfter", returnAfter)
             .putString("geminiKey", geminiKey).putString("dictionary", dictionary).putBoolean("phoneMic", phoneMic)
             .putBoolean("screen", screen).putInt("display", display).putBoolean("follow", follow)
+            .putBoolean("mirrorTouch", mirrorTouch)
             .apply()
     }
 

@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -52,7 +53,7 @@ fun ScreenView(modifier: Modifier = Modifier) {
         if (Prefs.follow) view?.followCursor(PadClient.cursorX, PadClient.cursorY)
     }
 
-    Box(modifier.clip(RoundedCornerShape(14.dp)).background(Color.Black)) {
+    Box(modifier.systemGestureExclusion().clip(RoundedCornerShape(14.dp)).background(Color.Black)) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
@@ -262,6 +263,11 @@ class ScreenSurface(ctx: Context) : TextureView(ctx), TextureView.SurfaceTexture
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (!Prefs.mirrorTouch) {   // view-only: ignore every touch (finish a drag that was already in progress)
+            main.removeCallbacks(longPress)
+            if (dragging) endDrag(e.x, e.y)
+            return true
+        }
         scaler.onTouchEvent(e)
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {

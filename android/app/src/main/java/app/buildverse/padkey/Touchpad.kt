@@ -19,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -50,7 +51,7 @@ fun Touchpad(modifier: Modifier = Modifier) {
     val density = LocalDensity.current.density
     val scope = rememberCoroutineScope()
 
-    Column(modifier.clip(RoundedCornerShape(14.dp)).background(Color(0xFF16181C))) {
+    Column(modifier.systemGestureExclusion().clip(RoundedCornerShape(14.dp)).background(Color(0xFF16181C))) {
         Box(
             Modifier.weight(1f).fillMaxWidth().pointerInput(Unit) {
                 var lastTapUp = 0L

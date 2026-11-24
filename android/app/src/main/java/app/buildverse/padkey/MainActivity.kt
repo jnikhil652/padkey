@@ -2,6 +2,7 @@ package app.buildverse.padkey
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -75,6 +76,11 @@ class MainActivity : ComponentActivity() {
         if (!isTv(this) && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1)
         PadClient.start(applicationContext)
+        // Phone: the edge back-swipe fires constantly while using the touchpad and used to close the app.
+        // Swallow Back so PadKey only leaves via Home (minimize) and is closed from Recents (swipe up).
+        if (!isTv(this)) onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {}
+        })
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(
                 primary = Color(0xFFFF7A1A), onPrimary = Color.Black,
@@ -376,6 +382,7 @@ internal fun SettingsDialog(onClose: () -> Unit) {
                 Text("Scroll speed  %.1fx".format(Prefs.scrollSpeed), fontSize = 13.sp)
                 Slider(Prefs.scrollSpeed, { Prefs.scrollSpeed = it }, valueRange = 0.3f..4f, onValueChangeFinished = { Prefs.save() })
                 SwitchRow("Natural scrolling", Prefs.natural) { Prefs.natural = it; Prefs.save() }
+                SwitchRow("Touch control on Mac screen mirror (off = view only)", Prefs.mirrorTouch) { Prefs.mirrorTouch = it; Prefs.save() }
                 SwitchRow("Left/right click strips", Prefs.strips) { Prefs.strips = it; Prefs.save() }
                 SwitchRow("Haptic feedback", Prefs.haptics) { Prefs.haptics = it; Prefs.save() }
                 SwitchRow("Press Return after typed text", Prefs.returnAfter) { Prefs.returnAfter = it; Prefs.save() }
