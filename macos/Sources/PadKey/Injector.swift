@@ -390,6 +390,54 @@ final class Injector {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: w)
     }
 
+    /// Puts a phone photo on the clipboard (PNG + TIFF) and pastes it: Ctrl+V in terminals (Claude Code and other
+    /// TUIs read images from the clipboard on Ctrl+V), Cmd+V elsewhere. The image stays on the clipboard so it can be pasted again.
+    func pasteImage(_ data: Data, done: (() -> Void)? = nil) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let img = NSImage(data: data), let tiff = img.tiffRepresentation,
+                  let rep = NSBitmapImageRep(data: tiff) else { done?(); return }
+            self.restoreWork?.cancel(); self.restoreWork = nil; self.savedBoard = nil
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            let item = NSPasteboardItem()
+            if let png = rep.representation(using: .png, properties: [:]) { item.setData(png, forType: .png) }
+            item.setData(tiff, forType: .tiff)
+            pb.writeObjects([item])
+            let terminals: Set<String> = ["com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable",
+                                          "net.kovidgoyal.kitty", "com.github.wez.wezterm", "org.alacritty", "co.zeit.hyper", "com.raphaelamorim.rio"]
+            let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+            let flag: CGEventFlags = terminals.contains(front) ? .maskControl : .maskCommand
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                if let v = CGEvent(keyboardEventSource: self.src, virtualKey: 9, keyDown: true),
+                   let u = CGEvent(keyboardEventSource: self.src, virtualKey: 9, keyDown: false) {
+                    for e in [v, u] { e.flags = flag; e.post(tap: .cghidEventTap) }
+                }
+                done?()
+            }
+        }
+    }
+
+    /// Posts Cmd+C and, once the clipboard changed (or after ~0.6 s), returns its text (nil if nothing was copied).
+    func copySelection(_ done: @escaping (String?) -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let pb = NSPasteboard.general
+            let before = pb.changeCount
+            if let v = CGEvent(keyboardEventSource: self.src, virtualKey: 8, keyDown: true),
+               let u = CGEvent(keyboardEventSource: self.src, virtualKey: 8, keyDown: false) {
+                for e in [v, u] { e.flags = .maskCommand; e.post(tap: .cghidEventTap) }
+            }
+            var tries = 0
+            func check() {
+                tries += 1
+                if pb.changeCount != before { done(pb.string(forType: .string)); return }
+                if tries >= 12 { done(nil); return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: check)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: check)
+        }
+    }
+
     // MARK: media / system keys
 
     private static let mediaKeys: [String: Int32] = [

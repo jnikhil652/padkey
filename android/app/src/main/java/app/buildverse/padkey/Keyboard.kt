@@ -268,3 +268,14 @@ private fun KeyCap(k: KeyDef, modifier: Modifier, shiftOn: Boolean, onLayer: (In
         }
     }
 }
+
+/** Chip in the Keys-mode shortcut strip (same look as the shortcut chips). */
+@Composable
+internal fun StripChip(label: String, onClick: () -> Unit) {
+    Box(
+        Modifier.fillMaxHeight().padding(vertical = 2.dp).clip(RoundedCornerShape(16.dp))
+            .background(KeyBgSpecial).border(1.dp, Color(0xFF3A3D45), RoundedCornerShape(16.dp))
+            .clickable { onClick() }.padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(label, fontSize = 13.sp, color = Color(0xFFE6E6EA)) }
+}

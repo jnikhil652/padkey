@@ -147,6 +147,8 @@ final class Server {
 }
 
 private final class Conn {
+    private var imgId = -1
+    private var imgParts: [Int: Data] = [:]
     let nw: NWConnection
     unowned let server: Server
     var buf = Data()
@@ -315,7 +317,7 @@ private final class Conn {
 
         switch t {
         case "ping":
-            send(["t": "pong", "id": o["id"] ?? 0])
+            send(["t": "pong", "id": o["id"] ?? 0, "dark": CGDisplayIsAsleep(CGMainDisplayID()) != 0])   // dark: displays are off
             if !sentCaps { sentCaps = true; send(["t": "caps", "on": inj.capsOn]) }
         case "move": inj.move(dx: num("dx"), dy: num("dy"), flags: int("f"))
         case "scroll": inj.scroll(dx: num("dx"), dy: num("dy"), flags: int("f"))
@@ -337,6 +339,24 @@ private final class Conn {
             if IOPMAssertionDeclareUserActivity("PadKey wake" as CFString, kIOPMUserActiveLocal, &aid) == kIOReturnSuccess {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 5) { IOPMAssertionRelease(aid) }
             }
+        case "img": // photo from the phone, sent in base64 chunks: i = 0..n-1, same id. Pasted once complete, then acked.
+            let id = int("id"), i = int("i"), n = int("n")
+            guard n > 0, n <= 64, i >= 0, i < n, let b = o["d"] as? String, let d = Data(base64Encoded: b) else { return }
+            if imgId != id { imgId = id; imgParts = [:] }
+            imgParts[i] = d
+            if imgParts.count == n {
+                var all = Data()
+                for k in 0..<n { all.append(imgParts[k] ?? Data()) }
+                imgParts = [:]; imgId = -1
+                inj.pasteImage(all) { [weak self] in self?.send(["t": "ack", "id": id]) }
+            }
+        case "copy": // Cmd+C on the Mac, then send the copied text to the phone's clipboard
+            inj.copySelection { [weak self] s in self?.send(["t": "clip", "s": s ?? ""]) }
+        case "displaysleep": // turn the Mac's displays off now (like Ctrl+Shift+Eject); Mac keeps running, `wake` turns them back on
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
+            p.arguments = ["displaysleepnow"]
+            try? p.run()
         case "screen":
             let on = (o["on"] as? NSNumber)?.boolValue ?? true
             if on && !CGPreflightScreenCaptureAccess() { _ = CGRequestScreenCaptureAccess() }

@@ -19,13 +19,22 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.max
+import kotlin.math.min
+import androidx.compose.ui.unit.max
+import androidx.compose.ui.unit.min
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -108,15 +117,27 @@ fun App() {
         PadClient.screen(Prefs.screen, Prefs.display)
     }
 
+    // Keyboard (IME) height above the nav bar. Third-party keyboards such as Fleksy change height while typing
+    // (suggestion bar, emoji row...), so layout uses the tallest height seen since it opened: the touchpad
+    // and mirror keep their size while you type, and only change when the keyboard opens or closes.
+    val density = LocalDensity.current
+    val imeNow = max(0, WindowInsets.ime.getBottom(density) - WindowInsets.navigationBars.getBottom(density))
+    val imeSeen = remember { IntArray(1) }   // plain holder: updated from the inset read, no extra recomposition
+    imeSeen[0] = if (imeNow == 0) 0 else max(imeSeen[0], imeNow)
+    val imeMax = imeSeen[0]
+    val imeNowDp = with(density) { imeNow.toDp() }
+    val imeMaxDp = with(density) { imeMax.toDp() }
+
     Column(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
-            .statusBarsPadding().navigationBarsPadding().imePadding(),
+            .statusBarsPadding().navigationBarsPadding(),
     ) {
         TopBar(typing, { typing = !typing }, { showConnect = true }, { showSettings = true }, ::toggleScreen, { showDisplays = true })
         PendingBar()
         val keys: @Composable (Modifier) -> Unit = { m -> if (typing) TypePanel(m) else KeyboardPanel(m) }
         if (landscape) {
-            Row(Modifier.weight(1f).fillMaxWidth().padding(4.dp)) {
+            // The keyboard spans the full width here, so everything sits above its (stable) height.
+            Row(Modifier.weight(1f).fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 4.dp + imeMaxDp)) {
                 if (mirror) {
                     ScreenView(Modifier.weight(1.5f).fillMaxSize())
                     Spacer(Modifier.width(6.dp))
@@ -131,14 +152,21 @@ fun App() {
                     keys(Modifier.weight(1.2f).fillMaxSize())
                 }
             }
-        } else if (mirror) {
-            // three equal parts: screen / touchpad / keyboard
-            ScreenView(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp))
-            Touchpad(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp))
-            keys(Modifier.weight(1f).fillMaxWidth())
         } else {
-            Touchpad(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp))
-            keys(Modifier.weight(1f).fillMaxWidth())
+            // Portrait: the keyboard covers the bottom (keys / Type) panel, not the touchpad. The panel only grows,
+            // and the touchpad only shrinks, if the keyboard is taller than the panel (leaving room for the text box).
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                val total = maxHeight
+                val share = if (mirror) total / 3 else total / 2
+                val panel = max(share, min(imeMaxDp + 150.dp, total - 120.dp))
+                Column(Modifier.fillMaxSize()) {
+                    Column(Modifier.fillMaxWidth().height(total - panel)) {
+                        if (mirror) ScreenView(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp))
+                        Touchpad(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp))
+                    }
+                    keys(Modifier.fillMaxWidth().height(panel).padding(bottom = imeNowDp))
+                }
+            }
         }
     }
     if (showDisplays) DisplayDialog { showDisplays = false }
@@ -237,12 +265,13 @@ private fun TopBar(
     Row(Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(10.dp).clip(CircleShape).background(color))
         Spacer(Modifier.width(6.dp))
-        Text(if (Voice.status.isNotEmpty() && Voice.state != VoiceState.Idle || Voice.status.startsWith("Error") || Voice.status.startsWith("Add")) Voice.status else text,
+        Text(if (PadClient.imgStatus.isNotEmpty()) PadClient.imgStatus
+            else if (Voice.status.isNotEmpty() && Voice.state != VoiceState.Idle || Voice.status.startsWith("Error") || Voice.status.startsWith("Add")) Voice.status else text,
             fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f), color = Color(0xFFD0D2D8))
         Spacer(Modifier.width(4.dp))
         DictateButton()
         Spacer(Modifier.width(4.dp))
-        BarChip("☀") { PadClient.wake() }
+        BarChip(if (PadClient.macDark) "☀" else "☾") { PadClient.toggleDisplay() }   // ☾ = turn Mac screen off, ☀ = wake it
         Spacer(Modifier.width(4.dp))
         BarChip("🖥", active = Prefs.screen, onLong = onDisplays, onClick = onScreen)
         Spacer(Modifier.width(4.dp))
@@ -298,6 +327,14 @@ internal fun TypePanel(modifier: Modifier) {
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { send() }),
         )
+        // Photo and phone <-> Mac clipboard
+        val ctx = LocalContext.current
+        Row(Modifier.fillMaxWidth().height(36.dp).padding(top = 4.dp).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            PhotoChip()
+            StripChip("Copy → 📱") { Haptics.tick(ctx); PadClient.copyToPhone() }
+            StripChip("📱 → Paste") { Haptics.tick(ctx); pasteFromPhone(ctx) }
+        }
         Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Checkbox(Prefs.returnAfter, { Prefs.returnAfter = it; Prefs.save() })
             Text("Return after", fontSize = 13.sp, modifier = Modifier.weight(1f))

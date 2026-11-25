@@ -70,7 +70,7 @@ Every message has a type field `t`. Numbers may be floats. Unknown messages/fiel
 
 ### Keep-alive
 
-Phone sends `{"t":"ping","id":<number>}` about every 2.5 s; Mac answers `{"t":"pong","id":<same>}` (the phone uses epoch millis to
+Phone sends `{"t":"ping","id":<number>}` about every 2.5 s; Mac answers `{"t":"pong","id":<same>,"dark":<bool>}` (`dark` = the Mac's displays are off) (the phone uses epoch millis to
 show latency). The Mac drops a connection silent for 12 s and releases every held key and button; the phone reconnects after
 8 s of silence. After the first ping the Mac sends `{"t":"caps","on":bool}` (Caps Lock state); it repeats it on every toggle.
 
@@ -88,6 +88,9 @@ show latency). The Mac drops a connection silent for 12 s and releases every hel
 | `media` | `k` | System key press: `volup voldown mute brightup brightdown play next prev fast rewind kbup kbdown`. |
 | `release` | - | Release all held keys/buttons. |
 | `wake` | - | Wake the display (declares user activity). Shows the lock screen if the Mac is locked; cannot wake a Mac in full system sleep. |
+| `img` | `id`, `i`, `n`, `d` (base64) | Photo (JPEG/PNG) in chunks `i` = 0..n-1 (n <= 64, ~192 KB base64 each). When all chunks of `id` arrived the Mac puts it on the clipboard (PNG + TIFF) and pastes it: Ctrl+V if a terminal is frontmost (Claude Code reads images on Ctrl+V), else Cmd+V. Answers `ack` with `id`. |
+| `copy` | - | Press Cmd+C on the Mac and send the copied text back as `{"t":"clip","s":...}` (empty if nothing was copied within ~0.6 s). |
+| `displaysleep` | - | Turn the Mac's displays off now (`pmset displaysleepnow`). The Mac keeps running; `wake` or any input turns them back on. |
 
 `text` / `paste` carry a random `id` (<= 2^53). The Mac answers `{"t":"ack","id":<id>}` once the text was posted. The phone keeps
 unacknowledged text and re-sends it after a reconnect; the Mac remembers the last 64 ids and re-acks a duplicate without typing it again.

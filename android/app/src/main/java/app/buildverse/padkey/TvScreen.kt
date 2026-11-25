@@ -143,7 +143,7 @@ private fun TvTopBar(typing: Boolean, onType: () -> Unit, onConnect: () -> Unit,
         Spacer(Modifier.width(10.dp))
         Text(text, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f), color = Color(0xFFD0D2D8))
         val connectLabel = if (PadClient.found.isNotEmpty() && !PadClient.connected) "Connect·${PadClient.found.size}" else "Connect"
-        TvButton("Wake", Modifier.width(110.dp).fillMaxHeight(), fontSize = 16) { PadClient.wake() }
+        TvButton(if (PadClient.macDark) "Wake" else "Screen off", Modifier.width(140.dp).fillMaxHeight(), fontSize = 16) { PadClient.toggleDisplay() }
         TvButton(connectLabel, Modifier.width(150.dp).fillMaxHeight(), fontSize = 16, onClick = onConnect)
         TvButton(if (typing) "Keys" else "Type text", Modifier.width(150.dp).fillMaxHeight(), active = typing, fontSize = 16, onClick = onType)
         TvButton("Settings", Modifier.width(130.dp).fillMaxHeight(), fontSize = 16, onClick = onSettings)
