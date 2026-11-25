@@ -318,6 +318,7 @@ internal fun TypePanel(modifier: Modifier) {
             Outbox.submit(text, Prefs.returnAfter)   // kept (and shown as pending) until the Mac confirms it
             text = ""
         } else PadClient.tap(VK.RETURN)
+        Mods.consume()   // a latched ⌘ only applies to the next key
     }
     Column(modifier.padding(6.dp)) {
         OutlinedTextField(
@@ -331,6 +332,9 @@ internal fun TypePanel(modifier: Modifier) {
         val ctx = LocalContext.current
         Row(Modifier.fillMaxWidth().height(36.dp).padding(top = 4.dp).horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            // ⌘ latches for the next key (double-tap locks), so ⌘ then tab = app switcher
+            StripChip("⌘ cmd", Mods.of(VK.CMD)) { Haptics.tick(ctx); Mods.tap(VK.CMD) }
+            StripChip("⇥ tab") { Haptics.tick(ctx); PadClient.tap(VK.TAB); Mods.consume() }
             PhotoChip()
             StripChip("Copy → 📱") { Haptics.tick(ctx); PadClient.copyToPhone() }
             StripChip("📱 → Paste") { Haptics.tick(ctx); pasteFromPhone(ctx) }
@@ -338,7 +342,7 @@ internal fun TypePanel(modifier: Modifier) {
         Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Checkbox(Prefs.returnAfter, { Prefs.returnAfter = it; Prefs.save() })
             Text("Return after", fontSize = 13.sp, modifier = Modifier.weight(1f))
-            OutlinedButton(onClick = { PadClient.tap(VK.DELETE) }) { Text("\u232B") }
+            OutlinedButton(onClick = { PadClient.tap(VK.DELETE); Mods.consume() }) { Text("\u232B") }
             Spacer(Modifier.width(6.dp))
             Button(onClick = { send() }) { Text("Send") }
         }
