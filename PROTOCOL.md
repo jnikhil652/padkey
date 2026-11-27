@@ -90,7 +90,7 @@ show latency). The Mac drops a connection silent for 12 s and releases every hel
 | `wake` | - | Wake the display (declares user activity). Shows the lock screen if the Mac is locked; cannot wake a Mac in full system sleep. |
 | `img` | `id`, `i`, `n`, `d` (base64) | Photo (JPEG/PNG) in chunks `i` = 0..n-1 (n <= 64, ~192 KB base64 each). When all chunks of `id` arrived the Mac puts it on the clipboard (PNG + TIFF) and pastes it: Ctrl+V if a terminal is frontmost (Claude Code reads images on Ctrl+V), else Cmd+V. Answers `ack` with `id`. |
 | `copy` | - | Press Cmd+C on the Mac and send the copied text back as `{"t":"clip","s":...}` (empty if nothing was copied within ~0.6 s). |
-| `displaysleep` | - | Turn the Mac's displays off now (`pmset displaysleepnow`). The Mac keeps running; `wake` or any input turns them back on. |
+| `displaysleep` | - | Blank the Mac's displays (gamma to black; real sleep can't be undone remotely with the lid closed). The Mac keeps running; `wake` or real local input restores them. While a phone is connected the displays don't idle-sleep. |
 
 `text` / `paste` carry a random `id` (<= 2^53). The Mac answers `{"t":"ack","id":<id>}` once the text was posted. The phone keeps
 unacknowledged text and re-sends it after a reconnect; the Mac remembers the last 64 ids and re-acks a duplicate without typing it again.

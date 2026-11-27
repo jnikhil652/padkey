@@ -5,7 +5,11 @@ import IOKit.hidsystem
 
 /// Turns protocol messages into CGEvents. All calls happen on the main queue.
 final class Injector {
-    private let src = CGEventSource(stateID: .hidSystemState)
+    private let src: CGEventSource? = {
+        let s = CGEventSource(stateID: .hidSystemState)
+        s?.userData = Blackout.injectedTag   // tells our own events apart from real local input
+        return s
+    }()
 
     // Pointer state
     private var pos = CGPoint.zero
