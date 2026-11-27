@@ -22,6 +22,10 @@ enum class VoiceState { Idle, Recording, Processing }
 object Voice {
     var state by mutableStateOf(VoiceState.Idle)
     var status by mutableStateOf("")
+    /** Transcript waiting for the user to edit and send (Prefs.reviewDictation). Shown in the Type panel if open, else a dialog. */
+    var draft by mutableStateOf<String?>(null)
+    /** > 0 while the Type panel is on screen: drafts go into its text field. */
+    var typePanels by mutableStateOf(0)
 
     private const val RATE = 16000
     private val models = listOf("gemini-3.5-flash-lite", "gemini-3.5-flash")
@@ -120,10 +124,16 @@ Rules:
             }
             val text = parts.joinToString(" ")
             if (text.isNotEmpty()) {
-                // Never lost: Outbox keeps it until the Mac acks, and copies it to the clipboard when offline.
-                val live = Outbox.submit(text, Prefs.returnAfter)
-                status = if (failure != null) "Part failed (${failure.take(50)}); rest kept: " + text.take(30)
-                else if (live) "Typed: " + text.take(40) else "Saved (offline): " + text.take(40)
+                if (Prefs.reviewDictation) {
+                    // Held as a draft for the user to edit; sending goes through the Outbox like typed text.
+                    draft = draft?.let { "$it $text" } ?: text
+                    status = if (failure != null) "Part failed (${failure.take(50)}); rest ready to review" else "Review, then Send"
+                } else {
+                    // Never lost: Outbox keeps it until the Mac acks, and copies it to the clipboard when offline.
+                    val live = Outbox.submit(text, Prefs.returnAfter)
+                    status = if (failure != null) "Part failed (${failure.take(50)}); rest kept: " + text.take(30)
+                    else if (live) "Typed: " + text.take(40) else "Saved (offline): " + text.take(40)
+                }
                 if (failure != null) failedAudio = data
             } else if (failure != null) {
                 failedAudio = data

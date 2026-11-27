@@ -56,11 +56,14 @@ object Outbox {
 
     fun joined() = items.joinToString("\n") { it.text }
 
-    fun copy() {
+    fun copy() = copyText(joined())
+    /** Put text on the phone clipboard (e.g. a discarded dictation, so it can still be recovered). */
+    fun copyText(t: String) {
         val c = ctx ?: return
+        if (t.isBlank()) return
         try {
             (c.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-                .setPrimaryClip(ClipData.newPlainText("PadKey text", joined()))
+                .setPrimaryClip(ClipData.newPlainText("PadKey text", t))
         } catch (_: Exception) { }
     }
 }

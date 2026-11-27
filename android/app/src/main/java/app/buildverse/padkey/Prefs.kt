@@ -27,6 +27,7 @@ object Prefs {
     var strips by mutableStateOf(true)
     var haptics by mutableStateOf(true)
     var returnAfter by mutableStateOf(false)
+    var reviewDictation by mutableStateOf(true)   // phone-mic dictation: edit the transcript before it is sent
     var geminiKey by mutableStateOf("")
     var dictionary by mutableStateOf("")
     var phoneMic by mutableStateOf(true)
@@ -53,6 +54,7 @@ object Prefs {
         strips = sp.getBoolean("strips", true)
         haptics = sp.getBoolean("haptics", true)
         returnAfter = sp.getBoolean("returnAfter", false)
+        reviewDictation = sp.getBoolean("reviewDictation", true)
         geminiKey = sp.getString("geminiKey", "") ?: ""
         dictionary = sp.getString("dictionary", "") ?: ""
         phoneMic = sp.getBoolean("phoneMic", true)
@@ -70,6 +72,7 @@ object Prefs {
             .putFloat("sens", sens).putFloat("scrollSpeed", scrollSpeed)
             .putBoolean("natural", natural).putBoolean("strips", strips)
             .putBoolean("haptics", haptics).putBoolean("returnAfter", returnAfter)
+            .putBoolean("reviewDictation", reviewDictation)
             .putString("geminiKey", geminiKey).putString("dictionary", dictionary).putBoolean("phoneMic", phoneMic)
             .putBoolean("screen", screen).putInt("display", display).putBoolean("follow", follow)
             .putBoolean("mirrorTouch", mirrorTouch)

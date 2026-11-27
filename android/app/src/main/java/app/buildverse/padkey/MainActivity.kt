@@ -40,6 +40,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
@@ -134,6 +136,7 @@ fun App() {
     ) {
         TopBar(typing, { typing = !typing }, { showConnect = true }, { showSettings = true }, ::toggleScreen, { showDisplays = true })
         PendingBar()
+        DictationReview()
         val keys: @Composable (Modifier) -> Unit = { m -> if (typing) TypePanel(m) else KeyboardPanel(m) }
         if (landscape) {
             // The keyboard spans the full width here, so everything sits above its (stable) height.
@@ -182,6 +185,40 @@ private fun SmallChip(label: String, onClick: () -> Unit) {
             .clickable { onClick() }.padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
     ) { Text(label, fontSize = 12.sp, color = Color.White) }
+}
+
+/** Edit a dictated transcript before it goes to the Mac (Prefs.reviewDictation), when the Type panel is not open. */
+@Composable
+internal fun DictationReview() {
+    val draft = Voice.draft ?: return
+    if (Voice.typePanels > 0) return
+    val ctx = LocalContext.current
+    var text by remember { mutableStateOf(draft) }
+    LaunchedEffect(draft) { if (draft != text) text = draft }   // another dictation was appended
+    fun close() { Voice.draft = null; Voice.status = "" }
+    AlertDialog(
+        onDismissRequest = { },   // only Send / Discard close it, so a stray tap does not lose the text
+        title = { Text("Review dictation") },
+        text = {
+            Column {
+                OutlinedTextField(text, { text = it; Voice.draft = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(Prefs.returnAfter, { Haptics.tick(ctx); Prefs.returnAfter = it; Prefs.save() })
+                    Text("Return after", fontSize = 13.sp)
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                Haptics.tick(ctx)
+                if (text.isNotBlank()) Outbox.submit(text, Prefs.returnAfter)
+                close()
+            }) { Text("Send") }
+        },
+        dismissButton = {
+            TextButton(onClick = { Haptics.tick(ctx); Outbox.copyText(text); close() }) { Text("Discard") }
+        },
+    )
 }
 
 /** Text that has not been acknowledged by the Mac yet (offline / send failed), and failed transcriptions. */
@@ -314,6 +351,11 @@ internal fun TypePanel(modifier: Modifier) {
     var text by remember { mutableStateOf("") }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { try { focus.requestFocus() } catch (_: Exception) { } }
+    // Dictation drafts (review mode) land here for editing instead of being sent.
+    DisposableEffect(Unit) { Voice.typePanels++; onDispose { Voice.typePanels-- } }
+    LaunchedEffect(Voice.draft) {
+        Voice.draft?.let { d -> text = if (text.isBlank()) d else text.trimEnd() + " " + d; Voice.draft = null }
+    }
     fun send() {
         if (text.isNotEmpty()) {
             Outbox.submit(text, Prefs.returnAfter)   // kept (and shown as pending) until the Mac confirms it
@@ -429,6 +471,7 @@ internal fun SettingsDialog(onClose: () -> Unit) {
                 SwitchRow("Left/right click strips", Prefs.strips) { Prefs.strips = it; Prefs.save() }
                 SwitchRow("Haptic feedback", Prefs.haptics) { Prefs.haptics = it; Prefs.save() }
                 SwitchRow("Press Return after typed text", Prefs.returnAfter) { Prefs.returnAfter = it; Prefs.save() }
+                SwitchRow("Review dictation before sending (edit, then Send)", Prefs.reviewDictation) { Prefs.reviewDictation = it; Prefs.save() }
                 ChoiceRow("Insert text by", listOf("Paste", "Type keystrokes"), if (Prefs.insertPaste) 0 else 1) { Prefs.insertPaste = it == 0; Prefs.save() }
                 ChoiceRow("Mirror quality", listOf("Standard", "Sharp"), Prefs.quality) {
                     Prefs.quality = it; Prefs.save()
