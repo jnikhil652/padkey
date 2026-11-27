@@ -349,8 +349,6 @@ private final class Conn {
                 imgParts = [:]; imgId = -1
                 inj.pasteImage(all) { [weak self] in self?.send(["t": "ack", "id": id]) }
             }
-        case "copy": // Cmd+C on the Mac, then send the copied text to the phone's clipboard
-            inj.copySelection { [weak self] s in self?.send(["t": "clip", "s": s ?? ""]) }
         case "displaysleep": // blank the Mac's displays; `wake` (or real local input) brings them back. See Blackout.
             Blackout.shared.set(true)
         case "screen":

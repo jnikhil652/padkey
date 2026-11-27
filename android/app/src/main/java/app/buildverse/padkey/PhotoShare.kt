@@ -59,32 +59,18 @@ internal fun PhotoChip() {
         Box(
             Modifier.fillMaxHeight().padding(vertical = 2.dp).clip(RoundedCornerShape(16.dp))
                 .background(Color(0xFF1F2126)).border(1.dp, Color(0xFF3A3D45), RoundedCornerShape(16.dp))
-                .clickable { menu = true }.padding(horizontal = 12.dp),
+                .clickable { Haptics.tick(ctx); menu = true }.padding(horizontal = 12.dp),
             contentAlignment = Alignment.Center,
         ) { Text("📎 Photo", fontSize = 13.sp, color = Color(0xFFE6E6EA)) }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text("Photo library") }, onClick = {
-                menu = false; pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                Haptics.tick(ctx); menu = false; pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
             })
             DropdownMenuItem(text = { Text("Camera") }, onClick = {
-                menu = false; try { cam.launch(camUri) } catch (_: Exception) { PadClient.imgStatus = "No camera app" }
+                Haptics.tick(ctx); menu = false; try { cam.launch(camUri) } catch (_: Exception) { PadClient.imgStatus = "No camera app" }
             })
         }
     }
-}
-
-/** Phone clipboard -> Mac: text is pasted on the Mac (kept as pending until it confirms), an image is sent as a photo. */
-internal fun pasteFromPhone(ctx: Context) {
-    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-    val clip = cm.primaryClip
-    if (clip == null || clip.itemCount == 0) { PadClient.imgStatus = "Phone clipboard is empty"; return }
-    val item = clip.getItemAt(0)
-    val desc = clip.description
-    if (item.uri != null && (0 until desc.mimeTypeCount).any { desc.getMimeType(it).startsWith("image/") }) { sendPhoto(ctx, item.uri); return }
-    val t = item.coerceToText(ctx)?.toString().orEmpty()
-    if (t.isEmpty()) { PadClient.imgStatus = "Phone clipboard is empty"; return }
-    Outbox.submit(t, false)
-    PadClient.imgStatus = "Pasted from phone: " + t.replace('\n', ' ').take(40)
 }
 
 /** Decode, scale to <= 2560 px on the long side, JPEG it and send it to the Mac. */

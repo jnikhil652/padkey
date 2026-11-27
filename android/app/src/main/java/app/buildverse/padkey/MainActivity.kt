@@ -239,10 +239,11 @@ internal fun PinDialog() {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BarChip(label: String, active: Boolean = false, onLong: (() -> Unit)? = null, onClick: () -> Unit) {
+    val ctx = LocalContext.current
     Box(
         Modifier.height(32.dp).clip(RoundedCornerShape(16.dp))
             .background(if (active) MaterialTheme.colorScheme.primary else Color(0xFF2B2D33))
-            .combinedClickable(onLongClick = onLong, onClick = onClick).padding(horizontal = 10.dp),
+            .combinedClickable(onLongClick = onLong?.let { l -> { Haptics.tick(ctx, strong = true); l() } }, onClick = { Haptics.tick(ctx); onClick() }).padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
     ) { Text(label, fontSize = 13.sp, maxLines = 1, color = if (active) Color.Black else Color.White) }
 }
@@ -328,23 +329,24 @@ internal fun TypePanel(modifier: Modifier) {
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { send() }),
         )
-        // Photo and phone <-> Mac clipboard
+        // cmd / tab / Copy / Paste / Photo
         val ctx = LocalContext.current
         Row(Modifier.fillMaxWidth().height(36.dp).padding(top = 4.dp).horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             // ⌘ latches for the next key (double-tap locks), so ⌘ then tab = app switcher
             StripChip("⌘ cmd", Mods.of(VK.CMD)) { Haptics.tick(ctx); Mods.tap(VK.CMD) }
             StripChip("⇥ tab") { Haptics.tick(ctx); PadClient.tap(VK.TAB); Mods.consume() }
+            // same as the Keys-mode Copy / Paste chips: ⌘C / ⌘V on the Mac
+            StripChip("Copy") { Haptics.tick(ctx); PadClient.combo(intArrayOf(VK.CMD), 8) }
+            StripChip("Paste") { Haptics.tick(ctx); PadClient.combo(intArrayOf(VK.CMD), 9) }
             PhotoChip()
-            StripChip("Copy → 📱") { Haptics.tick(ctx); PadClient.copyToPhone() }
-            StripChip("📱 → Paste") { Haptics.tick(ctx); pasteFromPhone(ctx) }
         }
         Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(Prefs.returnAfter, { Prefs.returnAfter = it; Prefs.save() })
+            Checkbox(Prefs.returnAfter, { Haptics.tick(ctx); Prefs.returnAfter = it; Prefs.save() })
             Text("Return after", fontSize = 13.sp, modifier = Modifier.weight(1f))
-            OutlinedButton(onClick = { PadClient.tap(VK.DELETE); Mods.consume() }) { Text("\u232B") }
+            OutlinedButton(onClick = { Haptics.tick(ctx); PadClient.tap(VK.DELETE); Mods.consume() }) { Text("\u232B") }
             Spacer(Modifier.width(6.dp))
-            Button(onClick = { send() }) { Text("Send") }
+            Button(onClick = { Haptics.tick(ctx); send() }) { Text("Send") }
         }
     }
 }

@@ -421,27 +421,6 @@ final class Injector {
         }
     }
 
-    /// Posts Cmd+C and, once the clipboard changed (or after ~0.6 s), returns its text (nil if nothing was copied).
-    func copySelection(_ done: @escaping (String?) -> Void) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            let pb = NSPasteboard.general
-            let before = pb.changeCount
-            if let v = CGEvent(keyboardEventSource: self.src, virtualKey: 8, keyDown: true),
-               let u = CGEvent(keyboardEventSource: self.src, virtualKey: 8, keyDown: false) {
-                for e in [v, u] { e.flags = .maskCommand; e.post(tap: .cghidEventTap) }
-            }
-            var tries = 0
-            func check() {
-                tries += 1
-                if pb.changeCount != before { done(pb.string(forType: .string)); return }
-                if tries >= 12 { done(nil); return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: check)
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: check)
-        }
-    }
-
     // MARK: media / system keys
 
     private static let mediaKeys: [String: Int32] = [

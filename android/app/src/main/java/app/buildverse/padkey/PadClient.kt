@@ -69,7 +69,6 @@ object PadClient {
     fun start(ctx: Context) {
         if (started) return
         started = true
-        appCtx = ctx.applicationContext
         Outbox.init(ctx.applicationContext)
         startDiscovery(ctx.applicationContext)
         thread(isDaemon = true, name = "padkey-supervisor") {
@@ -284,7 +283,6 @@ object PadClient {
                         if (System.currentTimeMillis() - darkSetAt > 3000) macDark = o.optBoolean("dark", false)
                     }
                     "caps" -> capsOn = o.optBoolean("on")
-                    "clip" -> gotClip(o.optString("s"))
                     "ack" -> { val id = o.optLong("id"); if (id == imgPending) { imgPending = 0; imgStatus = "Photo pasted on the Mac" } else Outbox.ack(id) }
                     "error" -> { message = "Mac: " + o.optString("msg"); autoConnect = false }
                 }
@@ -334,19 +332,7 @@ object PadClient {
     fun key(code: Int, down: Boolean, flags: Int = 0) = send("{\"t\":\"key\",\"c\":$code,\"d\":$down,\"f\":$flags}")
     fun wake() = send("{\"t\":\"wake\"}")
     fun displaySleep() = send("{\"t\":\"displaysleep\"}")
-    var imgStatus by mutableStateOf("")   // short status for photo / clipboard actions, shown in the top bar
-    @Volatile var appCtx: Context? = null
-    /** Copy the Mac's selection to the phone clipboard: the Mac presses Cmd+C and answers with `clip`. */
-    fun copyToPhone() { if (!connected) { imgStatus = "Not connected"; return }; imgStatus = "Copying from the Mac..."; send("{\"t\":\"copy\"}") }
-    private fun gotClip(s: String) {
-        if (s.isEmpty()) { imgStatus = "Nothing was copied on the Mac"; return }
-        val c = appCtx ?: return
-        android.os.Handler(android.os.Looper.getMainLooper()).post {
-            val cm = c.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("PadKey", s))
-        }
-        imgStatus = "Copied to phone: " + s.replace('\n', ' ').take(40)
-    }
+    var imgStatus by mutableStateOf("")   // short status for photo sharing, shown in the top bar
     @Volatile private var imgPending = 0L
     /** A photo (JPEG bytes): sent in base64 chunks, the Mac puts it on its clipboard and pastes it, then acks. */
     fun sendImage(bytes: ByteArray) {
